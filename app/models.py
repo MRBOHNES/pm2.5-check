@@ -22,3 +22,55 @@ class OpenMeteoLocation(BaseModel):
 
 # multi-city call returns a bare JSON list, one entry per requested city, in request order
 OpenMeteoResponse = list[OpenMeteoLocation]
+
+
+# ---- OpenAQ v3 (measured). Fields taken from samples/openaq_*.json ----
+
+class OpenAQMeta(BaseModel):
+    page: int
+    limit: int
+    found: int | str  # int, or a string like ">3" when the count is capped
+
+
+class OpenAQTime(BaseModel):
+    utc: str
+    local: str  # ISO with +05:30 offset
+
+
+class OpenAQPeriod(BaseModel):
+    label: str
+    datetimeFrom: OpenAQTime
+    datetimeTo: OpenAQTime
+
+
+class OpenAQCoverage(BaseModel):
+    percentComplete: float  # share of expected readings in this hour that arrived
+
+
+class OpenAQHour(BaseModel):
+    """One hourly PM2.5 average for one sensor."""
+    value: float
+    period: OpenAQPeriod
+    coverage: OpenAQCoverage
+
+
+class OpenAQHoursResponse(BaseModel):
+    meta: OpenAQMeta
+    results: list[OpenAQHour]
+
+
+class OpenAQCoordinates(BaseModel):
+    latitude: float
+    longitude: float
+
+
+class OpenAQLocation(BaseModel):
+    id: int
+    name: str
+    timezone: str
+    coordinates: OpenAQCoordinates | None = None
+
+
+class OpenAQLocationsResponse(BaseModel):
+    meta: OpenAQMeta
+    results: list[OpenAQLocation]
