@@ -1,6 +1,9 @@
 import type { City, PeakResponse, SeriesResponse } from "./types";
 
-export const BASE = (import.meta.env.VITE_API_URL ?? "http://localhost:8000").replace(/\/$/, "");
+// An empty or missing VITE_API_URL counts as "not set". The localhost fallback is for `npm run dev` only,
+// so a production build without the address fails with a clear message instead of calling localhost.
+const configured = (import.meta.env.VITE_API_URL ?? "").trim().replace(/\/$/, "");
+export const BASE = configured || (import.meta.env.DEV ? "http://localhost:8000" : "");
 const TIMEOUT_MS = 60_000; // generous: a cold serverless start plus a 30-day OpenAQ fetch
 
 export class ApiError extends Error {
@@ -13,6 +16,7 @@ export class ApiError extends Error {
 
 /** GET a JSON path from the backend with a timeout; throws ApiError on any failure. */
 export async function getJson<T>(path: string, params: Record<string, string | number> = {}, signal?: AbortSignal): Promise<T> {
+  if (!BASE) throw new ApiError("This site is missing its API address (VITE_API_URL was empty when it was built)");
   const url = new URL(`${BASE}${path}`);
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, String(v));
   const timeout = AbortSignal.timeout(TIMEOUT_MS);

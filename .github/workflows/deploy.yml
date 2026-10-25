@@ -65,6 +65,8 @@ jobs:
       # The project's Root Directory is "frontend", so the CLI runs from the repo root.
       - run: vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
       - run: vercel build --prod --token="$VERCEL_TOKEN"
+      - name: Check the build contains the backend address
+        run: scripts/check_bundle.sh .vercel/output/static "${{ secrets.BACKEND_URL }}"
       - id: deploy
         run: echo "url=$(vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN")" >> "$GITHUB_OUTPUT"
       - name: Smoke test the frontend
