@@ -6,25 +6,29 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
 import httpx
+import pandas as pd
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.analysis import (aqi_category, city_comparison, compare_model_measured,
-                          model_vs_measured, peak_day)
+from app.analysis import (INDIA_24H_STANDARD, aqi_category, category_counts, city_comparison, compare_model_measured,
+                          latest_day, model_stats, model_vs_measured, peak_day, pick_source, round_or_none)
+from app.cache import TTLCache
 from app.client import CITIES, UpstreamError, fetch_delhi_measured, fetch_open_meteo, window_utc
 from app.cleaning import ist_today, measured_daily, modelled_daily
 
 SOURCE = "modelled (Open-Meteo / CAMS)"
 MEASURED_CITY = "delhi"  # OpenAQ stations are only configured for Delhi
 MAX_DAYS = 92  # Open-Meteo's past_days limit
+CACHE_SECONDS = 600
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     async with httpx.AsyncClient(timeout=10) as client:
         app.state.client = client
+        app.state.cache = TTLCache(CACHE_SECONDS)
         yield
 
 
@@ -137,21 +141,51 @@ async def cities() -> list[dict]:
     return [{"name": c, "label": c.title(), "has_measured": c == MEASURED_CITY} for c in CITIES]
 
 
+async def _fetch_daily(request: Request, name: str, days: int) -> pd.DataFrame:
+    """Daily frame (date, modelled, measured) for one city. measured is NaN outside Delhi.
+
+    Upstream calls go through the best-effort cache so /peak and /series share them.
+    """
+    client, cache = request.app.state.client, request.app.state.cache
+    modelled_call = cache.get_or_fetch(("open-meteo", days), lambda: fetch_open_meteo(client, past_days=days))
+    if name == MEASURED_CITY:
+        start, end = window_utc(days)
+        locations, hours = await asyncio.gather(
+            modelled_call,
+            cache.get_or_fetch(("openaq", days), lambda: fetch_delhi_measured(client, start, end)))
+    else:
+        locations, hours = await modelled_call, None
+    modelled = modelled_daily({name: locations[name]})[["date", "pm25"]].rename(columns={"pm25": "modelled"})
+    if hours is None:
+        return modelled.assign(measured=float("nan"))
+    measured = measured_daily(hours)[["date", "pm25"]].rename(columns={"pm25": "measured"})
+    return modelled.merge(measured, on="date", how="left")  # keep days without station data
+
+
 @app.get("/peak")
 async def peak(request: Request, city: str = "Delhi", days: int = Query(30, ge=1, le=MAX_DAYS)) -> dict:
     """Peak daily PM2.5 over the last `days` days (measured if available, else modelled)."""
     name = _check_city(city)
-    client = request.app.state.client
-    if name == MEASURED_CITY:
-        start, end = window_utc(days)
-        locations, hours = await asyncio.gather(
-            fetch_open_meteo(client, past_days=days), fetch_delhi_measured(client, start, end))
-    else:
-        locations, hours = await fetch_open_meteo(client, past_days=days), None
-    modelled = modelled_daily({name: locations[name]})[["date", "pm25"]].rename(columns={"pm25": "modelled"})
-    if hours is None:
-        daily = modelled.assign(measured=float("nan"))
-    else:
-        measured = measured_daily(hours)[["date", "pm25"]].rename(columns={"pm25": "measured"})
-        daily = modelled.merge(measured, on="date", how="left")  # keep days without station data
+    daily = await _fetch_daily(request, name, days)
     return {"city": name, **peak_day(daily, days, today=ist_today())}
+
+
+@app.get("/series")
+async def series(request: Request, city: str = "Delhi", days: int = Query(30, ge=1, le=MAX_DAYS)) -> dict:
+    """Everything the page's chart and category cards need, for complete days only."""
+    name = _check_city(city)
+    daily = await _fetch_daily(request, name, days)
+    daily = daily[daily["date"] < ist_today()].sort_values("date")  # today is still in progress
+    source = pick_source(daily)
+    has_values = daily[source].notna().any()
+    return {
+        "city": name,
+        "window_days": days,
+        "standard": INDIA_24H_STANDARD,
+        "source": source if has_values else None,
+        "series": [{"date": str(r.date.date()), "modelled": round_or_none(r.modelled),
+                    "measured": round_or_none(r.measured)} for r in daily.itertuples()],
+        "stats": model_stats(daily),
+        "category_counts": category_counts(daily[source]),
+        "latest_day": latest_day(daily, source),
+    }

@@ -99,3 +99,34 @@ body {
   background: var(--ink-btn); color: var(--bg); border: 0; border-radius: var(--radius-btn);
   justify-self: start;
 }
+
+/* ---- Sections below the hero ---- */
+.section { padding: 0 0 var(--section-y); }
+.section__head { margin-bottom: 24px; display: grid; gap: 8px; }
+.chart-row { display: grid; grid-template-columns: 1fr 280px; gap: 24px; align-items: start; }
+.chart { margin: 0; display: grid; gap: 8px; }
+.chart__plot { height: 360px; }
+.stats { display: grid; gap: 16px; }
+.stats dl { margin: 0; display: grid; gap: 16px; }
+.stats dd { margin: 0; }
+
+.cards { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+.cat { display: grid; gap: 4px; align-content: start; padding: 24px; border-top: 6px solid var(--aqi-bg); }
+.cat .badge { justify-self: start; margin-bottom: 8px; }
+.cat p { margin: 0; }
+.cat--marked { border-color: var(--text); border-top-color: var(--aqi-bg); border-width: 2px; border-top-width: 6px; }
+.tag { font-weight: 600; }
+
+@media (max-width: 1024px) {
+  .chart-row { grid-template-columns: 1fr; }
+}
+@media (max-width: 768px) {
+  .cards { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 640px) {
+  .chart__plot { height: 280px; }
+  .cat { padding: 16px; }
+}
+
+.legend { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px 24px; }
+.legend li { display: flex; align-items: center; gap: 8px; }

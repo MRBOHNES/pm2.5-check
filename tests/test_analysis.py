@@ -2,8 +2,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from app.analysis import (aqi_category, city_comparison, compare_model_measured,
-                          correlation, mae, peak_day, zscore_outliers)
+from app.analysis import (aqi_category, category_counts, city_comparison, compare_model_measured,
+                          correlation, latest_day, mae, model_stats, peak_day, pick_source,
+                          zscore_outliers)
 
 
 @pytest.mark.parametrize("value,label", [
@@ -95,3 +96,26 @@ def test_peak_excludes_today():
     d = _daily([10.0, 20.0, 999.0], [10.0, 20.0, 999.0])
     out = peak_day(d, days=3, today=pd.Timestamp("2026-01-03"))
     assert out["peak"]["date"] == "2026-01-02"
+
+
+def test_category_counts_has_all_six_labels_and_skips_nan():
+    out = category_counts([10, 30, 31, np.nan, 300])
+    assert list(out) == ["Good", "Satisfactory", "Moderate", "Poor", "Very Poor", "Severe"]
+    assert out["Good"] == 2 and out["Satisfactory"] == 1 and out["Severe"] == 1
+    assert sum(out.values()) == 4
+
+
+def test_pick_source_and_latest_day():
+    d = _daily([10.0, 20.0, 30.0], [5.0, 95.0, np.nan])
+    assert pick_source(d) == "measured"
+    assert latest_day(d, "measured") == {"date": "2026-01-02", "value": 95.0, "category": "Poor"}
+    assert latest_day(d, "modelled")["date"] == "2026-01-03"
+    assert latest_day(_daily([np.nan], [np.nan]), "modelled") is None
+
+
+def test_model_stats_none_without_overlap_and_null_correlation_for_one_day():
+    assert model_stats(_daily([10.0, 20.0], [np.nan, np.nan])) is None
+    one = model_stats(_daily([10.0, 20.0], [np.nan, 25.0]))
+    assert one["days"] == 1 and one["mae"] == 5.0 and one["correlation"] is None
+    two = model_stats(_daily([10.0, 20.0, 30.0], [12.0, 18.0, 33.0]))
+    assert two["days"] == 3 and two["correlation"] > 0.9

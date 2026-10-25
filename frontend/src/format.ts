@@ -1,10 +1,9 @@
-/** "2026-10-21" -> "21 Oct". Parsed as UTC so the viewer's time zone can't shift the day. */
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** "2026-10-21" -> "21 Oct". Plain string maths, so no time zone or locale can shift it. */
 export function formatDay(iso: string): string {
-  return new Date(`${iso}T00:00:00Z`).toLocaleDateString("en-GB", {
-    day: "numeric",
-    month: "short",
-    timeZone: "UTC",
-  });
+  const [, month, day] = iso.split("-").map(Number);
+  return `${day} ${MONTHS[month - 1]}`;
 }
 
 /** "Very Poor" -> "very-poor", used for CSS class names. */

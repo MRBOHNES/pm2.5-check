@@ -26,3 +26,28 @@ export interface PeakResponse {
   peak: Peak | null;
   reason?: string;
 }
+
+export interface SeriesPoint {
+  date: string;
+  modelled: number | null;
+  measured: number | null;
+}
+
+export interface Stats {
+  days: number;
+  mae: number;
+  bias: number; // modelled - measured, averaged; negative = model reads lower
+  correlation: number | null;
+  outlier_dates: string[];
+}
+
+export interface SeriesResponse {
+  city: string;
+  window_days: number;
+  standard: number;
+  source: "measured" | "modelled" | null;
+  series: SeriesPoint[];
+  stats: Stats | null; // null when there is no station data to compare with
+  category_counts: Record<Category, number>;
+  latest_day: { date: string; value: number; category: Category } | null;
+}

@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import App from "./App";
 
 const CITIES = [{ name: "delhi", label: "Delhi", has_measured: true }];
@@ -8,9 +8,16 @@ const PEAK = {
           category: "Very Poor", ratio_to_standard: 2.5 },
 };
 
+const SERIES = {
+  city: "delhi", window_days: 30, standard: 60, source: "measured", stats: null,
+  series: [{ date: "2026-10-20", modelled: 50, measured: 60 }],
+  category_counts: { Good: 0, Satisfactory: 1, Moderate: 0, Poor: 0, "Very Poor": 0, Severe: 0 },
+  latest_day: { date: "2026-10-20", value: 60, category: "Satisfactory" },
+};
+
 function stubFetch(peakStatus = 200) {
   vi.stubGlobal("fetch", vi.fn(async (url: URL) => {
-    const body = url.pathname === "/cities" ? CITIES : PEAK;
+    const body = url.pathname === "/cities" ? CITIES : url.pathname === "/series" ? SERIES : PEAK;
     const ok = url.pathname === "/cities" || peakStatus === 200;
     return { ok, status: ok ? 200 : peakStatus, json: async () => body } as Response;
   }));
@@ -32,6 +39,15 @@ test("shows title, tagline, headline above the peak card, and the city list", as
 test("shows an error with a retry button when the backend fails", async () => {
   stubFetch(502);
   render(<App />);
-  expect(await screen.findByRole("alert")).toHaveTextContent("The server answered 502");
+  const alerts = await screen.findAllByRole("alert"); // peak card and chart each report the failure
+  expect(alerts[0]).toHaveTextContent("The server answered 502");
   expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
+});
+
+test("shows the category cards once the series has loaded", async () => {
+  stubFetch();
+  render(<App />);
+  expect(await screen.findByRole("heading", { name: "Days in each CPCB category" })).toBeInTheDocument();
+  const cards = screen.getByRole("list", { name: "Days in each CPCB category" });
+  expect(within(cards).getAllByRole("listitem")).toHaveLength(6);
 });

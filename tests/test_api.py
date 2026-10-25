@@ -136,3 +136,38 @@ def test_cors_allows_dev_origin_only(api):
     assert ok.headers["access-control-allow-origin"] == "http://localhost:5173"
     bad = api.get("/health", headers={"Origin": "https://evil.example"})
     assert "access-control-allow-origin" not in bad.headers
+
+
+@respx.mock
+def test_series_delhi_has_everything_the_page_needs(api, monkeypatch):
+    _peak_setup(monkeypatch)
+    body = api.get("/series", params={"city": "delhi", "days": 7}).json()
+    assert body["source"] == "measured" and body["standard"] == 60
+    assert all(r["date"] < "2026-10-24" for r in body["series"])  # today excluded
+    assert any(r["measured"] is not None for r in body["series"])
+    assert body["stats"]["days"] >= 1 and body["stats"]["mae"] >= 0
+    assert sum(body["category_counts"].values()) == sum(r["measured"] is not None for r in body["series"])
+    assert body["latest_day"]["date"] <= "2026-10-23"
+
+
+@respx.mock
+def test_series_other_city_is_modelled_with_no_stats(api, monkeypatch):
+    _peak_setup(monkeypatch)
+    body = api.get("/series", params={"city": "bengaluru", "days": 7}).json()
+    assert body["source"] == "modelled" and body["stats"] is None
+    assert all(r["measured"] is None for r in body["series"])
+    assert sum(body["category_counts"].values()) == len(body["series"])
+
+
+def test_series_unknown_city_404(api):
+    assert api.get("/series", params={"city": "atlantis"}).status_code == 404
+
+
+@respx.mock
+def test_peak_then_series_hit_each_upstream_once(api, monkeypatch):
+    _peak_setup(monkeypatch)
+    api.get("/peak", params={"city": "delhi", "days": 7})
+    api.get("/series", params={"city": "delhi", "days": 7})
+    om = [call for call in respx.calls if str(call.request.url).startswith(c.OPEN_METEO_URL)]
+    aq = [call for call in respx.calls if str(call.request.url).startswith(c.OPENAQ_URL)]
+    assert len(om) == 1 and len(aq) == 5  # five stations, fetched once each

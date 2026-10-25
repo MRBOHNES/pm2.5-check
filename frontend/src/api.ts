@@ -1,4 +1,4 @@
-import type { City, PeakResponse } from "./types";
+import type { City, PeakResponse, SeriesResponse } from "./types";
 
 const BASE = (import.meta.env.VITE_API_URL ?? "http://localhost:8000").replace(/\/$/, "");
 const TIMEOUT_MS = 60_000; // generous: a cold serverless start plus a 30-day OpenAQ fetch
@@ -32,3 +32,6 @@ export const fetchCities = (signal?: AbortSignal) => getJson<City[]>("/cities", 
 
 export const fetchPeak = (city: string, days: number, signal?: AbortSignal) =>
   getJson<PeakResponse>("/peak", { city, days }, signal);
+
+export const fetchSeries = (city: string, days: number, signal?: AbortSignal) =>
+  getJson<SeriesResponse>("/series", { city, days }, signal);

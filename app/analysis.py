@@ -80,9 +80,42 @@ def model_vs_measured(modelled: pd.DataFrame, measured: pd.DataFrame) -> pd.Data
 INDIA_24H_STANDARD = 60  # ug/m3, 24-hour PM2.5 limit in India's 2009 NAAQS
 
 
-def _round_or_none(x: float, digits: int = 1) -> float | None:
+def round_or_none(x: float, digits: int = 1) -> float | None:
     """NaN becomes None (JSON null); anything else is rounded."""
     return None if pd.isna(x) else round(float(x), digits)
+
+
+def pick_source(daily: pd.DataFrame) -> str:
+    """"measured" when any station value exists in the frame, else "modelled"."""
+    return "measured" if daily["measured"].notna().any() else "modelled"
+
+
+def category_counts(values) -> dict[str, int]:
+    """Days in each CPCB category (all six labels, zeros included). NaN days are skipped."""
+    cats = aqi_category(np.asarray(values, dtype=float))
+    return {label: int(sum(c == label for c in cats)) for label in AQI_LABELS}
+
+
+def latest_day(daily: pd.DataFrame, source: str) -> dict | None:
+    """Most recent day that has a value in `source`: date, value, category. None if no data."""
+    d = daily.dropna(subset=[source]).sort_values("date")
+    if d.empty:
+        return None
+    row = d.iloc[-1]
+    value = float(row[source])
+    return {"date": str(row["date"].date()), "value": round(value, 1),
+            "category": str(aqi_category([value])[0])}
+
+
+def model_stats(daily: pd.DataFrame) -> dict | None:
+    """MAE, correlation and bias over days with both values; None when there are none."""
+    if daily.dropna(subset=["modelled", "measured"]).empty:
+        return None
+    s = compare_model_measured(daily)
+    r = s["correlation"]
+    return {"days": s["days"], "mae": round(s["mae"], 1), "bias": round(s["bias"], 1),
+            "correlation": None if r is None or np.isnan(r) else round(r, 2),
+            "outlier_dates": s["outlier_dates"]}
 
 
 def peak_day(daily: pd.DataFrame, days: int, today: pd.Timestamp | None = None) -> dict:
@@ -95,7 +128,7 @@ def peak_day(daily: pd.DataFrame, days: int, today: pd.Timestamp | None = None) 
     d = daily.sort_values("date").reset_index(drop=True)
     if today is not None:
         d = d[d["date"] < today].reset_index(drop=True)
-    source = "measured" if d["measured"].notna().any() else "modelled"
+    source = pick_source(d)
     values = d[source]
     out = {"standard": INDIA_24H_STANDARD, "window_days": days, "source": source,
            "days_compared": int(values.notna().sum())}
@@ -107,9 +140,9 @@ def peak_day(daily: pd.DataFrame, days: int, today: pd.Timestamp | None = None) 
     out["peak"] = {
         "date": str(row["date"].date()),
         "value": round(value, 1),
-        "measured": _round_or_none(row["measured"]),
-        "modelled": _round_or_none(row["modelled"]),
-        "difference": _round_or_none(row["modelled"] - row["measured"]),  # + = model higher
+        "measured": round_or_none(row["measured"]),
+        "modelled": round_or_none(row["modelled"]),
+        "difference": round_or_none(row["modelled"] - row["measured"]),  # + = model higher
         "category": str(aqi_category([value])[0]),
         "ratio_to_standard": round(value / INDIA_24H_STANDARD, 1),
     }
