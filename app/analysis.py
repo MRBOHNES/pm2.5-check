@@ -1,4 +1,5 @@
 """NumPy / pandas analysis: AQI categories, model-vs-measured stats, city comparison."""
+
 import numpy as np
 import pandas as pd
 
@@ -63,8 +64,7 @@ def city_comparison(daily: pd.DataFrame) -> pd.DataFrame:
     """daily has city, date, pm25. One row per city: mean and days in each category."""
     d = daily.dropna(subset=["pm25"]).copy()
     d["category"] = aqi_category(d["pm25"])
-    counts = d.pivot_table(index="city", columns="category", values="pm25",
-                           aggfunc="count", fill_value=0)
+    counts = d.pivot_table(index="city", columns="category", values="pm25", aggfunc="count", fill_value=0)
     counts = counts.reindex(columns=AQI_LABELS, fill_value=0)
     out = d.groupby("city")["pm25"].agg(mean_pm25="mean", days="count")
     return out.join(counts).reset_index()
@@ -75,3 +75,90 @@ def model_vs_measured(modelled: pd.DataFrame, measured: pd.DataFrame) -> pd.Data
     m = modelled[["date", "pm25"]].rename(columns={"pm25": "modelled"})
     o = measured[["date", "pm25"]].rename(columns={"pm25": "measured"})
     return m.merge(o, on="date", how="inner")
+
+
+INDIA_24H_STANDARD = 60  # ug/m3, 24-hour PM2.5 limit in India's 2009 NAAQS
+
+
+def round_or_none(x: float, digits: int = 1) -> float | None:
+    """NaN becomes None (JSON null); anything else is rounded."""
+    return None if pd.isna(x) else round(float(x), digits)
+
+
+def pick_source(daily: pd.DataFrame) -> str:
+    """ "measured" when any station value exists in the frame, else "modelled"."""
+    return "measured" if daily["measured"].notna().any() else "modelled"
+
+
+def category_counts(values) -> dict[str, int]:
+    """Days in each CPCB category (all six labels, zeros included). NaN days are skipped."""
+    cats = aqi_category(np.asarray(values, dtype=float))
+    return {label: int(sum(c == label for c in cats)) for label in AQI_LABELS}
+
+
+def latest_day(daily: pd.DataFrame, source: str) -> dict | None:
+    """Most recent day that has a value in `source`: date, value, category. None if no data."""
+    d = daily.dropna(subset=[source]).sort_values("date")
+    if d.empty:
+        return None
+    row = d.iloc[-1]
+    value = float(row[source])
+    return {
+        "date": str(row["date"].date()),
+        "value": round(value, 1),
+        "category": str(aqi_category([value])[0]),
+    }
+
+
+def model_stats(daily: pd.DataFrame) -> dict | None:
+    """MAE, correlation and bias over days with both values; None when there are none."""
+    if daily.dropna(subset=["modelled", "measured"]).empty:
+        return None
+    s = compare_model_measured(daily)
+    r = s["correlation"]
+    return {
+        "days": s["days"],
+        "mae": round(s["mae"], 1),
+        "bias": round(s["bias"], 1),
+        "correlation": None if r is None or np.isnan(r) else round(r, 2),
+        "outlier_dates": s["outlier_dates"],
+    }
+
+
+def peak_day(daily: pd.DataFrame, days: int, today: pd.Timestamp | None = None) -> dict:
+    """Highest daily PM2.5 in the window. daily has columns date, modelled, measured.
+
+    Uses measured values when any exist, otherwise falls back to modelled and says so.
+    Days on or after `today` are dropped: today is still in progress (or forecast).
+    Ties go to the earliest date because the frame is sorted by date first.
+    """
+    d = daily.sort_values("date").reset_index(drop=True)
+    if today is not None:
+        d = d[d["date"] < today].reset_index(drop=True)
+    source = pick_source(d)
+    values = d[source]
+    out = {
+        "standard": INDIA_24H_STANDARD,
+        "window_days": days,
+        "source": source,
+        "days_compared": int(values.notna().sum()),
+    }
+    if out["days_compared"] == 0:
+        return {
+            **out,
+            "source": None,
+            "peak": None,
+            "reason": f"no valid daily PM2.5 values in the last {days} days",
+        }
+    row = d.loc[values.idxmax()]  # idxmax skips NaN and returns the first maximum
+    value = float(row[source])
+    out["peak"] = {
+        "date": str(row["date"].date()),
+        "value": round(value, 1),
+        "measured": round_or_none(row["measured"]),
+        "modelled": round_or_none(row["modelled"]),
+        "difference": round_or_none(row["modelled"] - row["measured"]),  # + = model higher
+        "category": str(aqi_category([value])[0]),
+        "ratio_to_standard": round(value / INDIA_24H_STANDARD, 1),
+    }
+    return out

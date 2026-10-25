@@ -1,4 +1,5 @@
 """Matplotlib charts, saved to output/."""
+
 import asyncio
 from pathlib import Path
 
@@ -8,10 +9,9 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
-from app.analysis import AQI_LABELS, city_comparison  # noqa: E402
-from app.analysis import compare_model_measured, model_vs_measured  # noqa: E402
-from app.client import fetch_delhi_measured, fetch_open_meteo, window_utc  # noqa: E402
+from app.analysis import AQI_LABELS, city_comparison, compare_model_measured, model_vs_measured  # noqa: E402  # noqa: E402
 from app.cleaning import measured_daily, modelled_daily  # noqa: E402
+from app.client import fetch_delhi_measured, fetch_open_meteo, window_utc  # noqa: E402
 
 OUT = Path(__file__).parent.parent / "output"
 BAND_COLOURS = ["#2e9e5b", "#9bc53d", "#f2c230", "#f08a24", "#d9482b", "#8b1e3f"]
@@ -47,8 +47,11 @@ def model_vs_measured_chart(joined, stats: dict, path: Path) -> None:
     fig, ax = plt.subplots(figsize=(9, 4.5))
     ax.plot(joined["date"], joined["modelled"], marker="o", label="Modelled (Open-Meteo/CAMS)")
     ax.plot(joined["date"], joined["measured"], marker="s", label="Measured (mean of OpenAQ stations)")
-    ax.set(title=f"Delhi daily PM2.5: MAE {stats['mae']:.0f} µg/m³, r = {stats['correlation']:.2f}, "
-                 f"bias {stats['bias']:+.0f} (n={stats['days']} days)", ylabel="PM2.5 (µg/m³)")
+    ax.set(
+        title=f"Delhi daily PM2.5: MAE {stats['mae']:.0f} µg/m³, r = {stats['correlation']:.2f}, "
+        f"bias {stats['bias']:+.0f} (n={stats['days']} days)",
+        ylabel="PM2.5 (µg/m³)",
+    )
     ax.legend()
     fig.autofmt_xdate()
     fig.tight_layout()
@@ -61,7 +64,8 @@ async def main() -> None:
     async with httpx.AsyncClient(timeout=10) as client:
         start, end = window_utc()
         locations, hours = await asyncio.gather(
-            fetch_open_meteo(client), fetch_delhi_measured(client, start, end))
+            fetch_open_meteo(client), fetch_delhi_measured(client, start, end)
+        )
     daily = modelled_daily(locations)
     joined = model_vs_measured(daily[daily["city"] == "delhi"], measured_daily(hours))
     stats = compare_model_measured(joined)

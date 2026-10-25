@@ -1,26 +1,76 @@
 """FastAPI app. Modelled data (Open-Meteo) for all cities; measured (OpenAQ) for Delhi."""
+
 import asyncio
+import os
+import re
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 
 import httpx
+import pandas as pd
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.analysis import aqi_category, city_comparison, compare_model_measured, model_vs_measured
+from app.analysis import (
+    INDIA_24H_STANDARD,
+    aqi_category,
+    category_counts,
+    city_comparison,
+    compare_model_measured,
+    latest_day,
+    model_stats,
+    model_vs_measured,
+    peak_day,
+    pick_source,
+    round_or_none,
+)
+from app.cache import TTLCache
+from app.cleaning import ist_today, measured_daily, modelled_daily
 from app.client import CITIES, UpstreamError, fetch_delhi_measured, fetch_open_meteo, window_utc
-from app.cleaning import measured_daily, modelled_daily
 
 SOURCE = "modelled (Open-Meteo / CAMS)"
+MEASURED_CITY = "delhi"  # OpenAQ stations are only configured for Delhi
+MAX_DAYS = 92  # Open-Meteo's past_days limit
+CACHE_SECONDS = 600
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     async with httpx.AsyncClient(timeout=10) as client:
         app.state.client = client
+        app.state.cache = TTLCache(CACHE_SECONDS)
         yield
 
 
+def cors_settings(raw: str) -> tuple[list[str], str | None]:
+    """Split a comma-separated ALLOWED_ORIGINS into exact origins and one regex.
+
+    An entry containing '*' is a pattern; '*' matches one host label (letters, digits, '-'),
+    never a dot, e.g. https://pm25-check-*-me.vercel.app.
+    """
+    exact, patterns = [], []
+    for item in (x.strip() for x in raw.split(",")):
+        if item:
+            (patterns if "*" in item else exact).append(item)
+    regex = "|".join(re.escape(p).replace(r"\*", "[A-Za-z0-9-]+") for p in patterns)
+    return exact, regex or None
+
+
+load_dotenv()
+_origins, _origin_regex = cors_settings(
+    os.getenv("ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173")
+)
+
 app = FastAPI(title="PM2.5 check", lifespan=lifespan)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_origins,
+    allow_origin_regex=_origin_regex,
+    allow_methods=["GET"],
+    allow_headers=["*"],
+)
 
 
 @app.exception_handler(UpstreamError)
@@ -34,6 +84,14 @@ async def upstream_error(_: Request, exc: UpstreamError) -> JSONResponse:
 async def missing_config(_: Request, exc: RuntimeError) -> JSONResponse:
     """E.g. OPENAQ_API_KEY not set."""
     return JSONResponse({"detail": str(exc)}, status_code=503)
+
+
+def _check_city(city: str) -> str:
+    """Lower-case the name or raise 404 if the backend doesn't support it."""
+    name = city.strip().lower()
+    if name not in CITIES:
+        raise HTTPException(404, f"unknown city: {name}; try {list(CITIES)}")
+    return name
 
 
 async def _daily(request: Request, cities: list[str]):
@@ -55,7 +113,7 @@ async def summary(city: str, request: Request) -> dict:
         "mean_pm25": round(float(valid["pm25"].mean()), 1),
         "daily": [
             {"date": str(r.date.date()), "pm25": round(r.pm25, 1), "category": c}
-            for r, c in zip(valid.itertuples(), aqi_category(valid["pm25"]))
+            for r, c in zip(valid.itertuples(), aqi_category(valid["pm25"]), strict=True)
         ],
     }
 
@@ -66,15 +124,19 @@ async def delhi_model_vs_measured(request: Request) -> dict:
     client = request.app.state.client
     start, end = window_utc()
     locations, hours = await asyncio.gather(
-        fetch_open_meteo(client), fetch_delhi_measured(client, start, end))
+        fetch_open_meteo(client), fetch_delhi_measured(client, start, end)
+    )
     joined = model_vs_measured(modelled_daily({"delhi": locations["delhi"]}), measured_daily(hours))
     return {
         "modelled_source": SOURCE,
         "measured_source": f"measured (OpenAQ, {len(hours)} Delhi stations)",
         "stats": compare_model_measured(joined),
         "daily": [
-            {"date": str(r.date.date()), "modelled": round(r.modelled, 1),
-             "measured": None if r.measured != r.measured else round(r.measured, 1)}
+            {
+                "date": str(r.date.date()),
+                "modelled": round(r.modelled, 1),
+                "measured": None if r.measured != r.measured else round(r.measured, 1),
+            }
             for r in joined.itertuples()
         ],
     }
@@ -86,3 +148,73 @@ async def compare(request: Request, cities: str = Query(",".join(CITIES))) -> di
     daily = await _daily(request, names)
     table = city_comparison(daily).round(1)
     return {"source": SOURCE, "cities": table.to_dict(orient="records")}
+
+
+@app.get("/health")
+async def health() -> dict:
+    """Liveness check. Makes no upstream calls."""
+    sha = os.getenv("VERCEL_GIT_COMMIT_SHA") or os.getenv("GIT_SHA") or "dev"
+    return {"status": "ok", "version": sha[:7], "time": datetime.now(timezone.utc).isoformat()}
+
+
+@app.get("/cities")
+async def cities() -> list[dict]:
+    """Cities the backend supports; has_measured says whether station data exists."""
+    return [{"name": c, "label": c.title(), "has_measured": c == MEASURED_CITY} for c in CITIES]
+
+
+async def _fetch_daily(request: Request, name: str, days: int) -> pd.DataFrame:
+    """Daily frame (date, modelled, measured) for one city. measured is NaN outside Delhi.
+
+    Upstream calls go through the best-effort cache so /peak and /series share them.
+    """
+    client, cache = request.app.state.client, request.app.state.cache
+    modelled_call = cache.get_or_fetch(("open-meteo", days), lambda: fetch_open_meteo(client, past_days=days))
+    if name == MEASURED_CITY:
+        start, end = window_utc(days)
+        locations, hours = await asyncio.gather(
+            modelled_call,
+            cache.get_or_fetch(("openaq", days), lambda: fetch_delhi_measured(client, start, end)),
+        )
+    else:
+        locations, hours = await modelled_call, None
+    modelled = modelled_daily({name: locations[name]})[["date", "pm25"]].rename(columns={"pm25": "modelled"})
+    if hours is None:
+        return modelled.assign(measured=float("nan"))
+    measured = measured_daily(hours)[["date", "pm25"]].rename(columns={"pm25": "measured"})
+    return modelled.merge(measured, on="date", how="left")  # keep days without station data
+
+
+@app.get("/peak")
+async def peak(request: Request, city: str = "Delhi", days: int = Query(30, ge=1, le=MAX_DAYS)) -> dict:
+    """Peak daily PM2.5 over the last `days` days (measured if available, else modelled)."""
+    name = _check_city(city)
+    daily = await _fetch_daily(request, name, days)
+    return {"city": name, **peak_day(daily, days, today=ist_today())}
+
+
+@app.get("/series")
+async def series(request: Request, city: str = "Delhi", days: int = Query(30, ge=1, le=MAX_DAYS)) -> dict:
+    """Everything the page's chart and category cards need, for complete days only."""
+    name = _check_city(city)
+    daily = await _fetch_daily(request, name, days)
+    daily = daily[daily["date"] < ist_today()].sort_values("date")  # today is still in progress
+    source = pick_source(daily)
+    has_values = daily[source].notna().any()
+    return {
+        "city": name,
+        "window_days": days,
+        "standard": INDIA_24H_STANDARD,
+        "source": source if has_values else None,
+        "series": [
+            {
+                "date": str(r.date.date()),
+                "modelled": round_or_none(r.modelled),
+                "measured": round_or_none(r.measured),
+            }
+            for r in daily.itertuples()
+        ],
+        "stats": model_stats(daily),
+        "category_counts": category_counts(daily[source]),
+        "latest_day": latest_day(daily, source),
+    }

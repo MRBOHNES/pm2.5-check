@@ -24,10 +24,12 @@ def sleeps(monkeypatch):
 
 @respx.mock
 async def test_429_then_success_honours_retry_after(sleeps):
-    route = respx.get(URL).mock(side_effect=[
-        httpx.Response(429, headers={"Retry-After": "2"}),
-        httpx.Response(200, json={"ok": True}),
-    ])
+    route = respx.get(URL).mock(
+        side_effect=[
+            httpx.Response(429, headers={"Retry-After": "2"}),
+            httpx.Response(200, json={"ok": True}),
+        ]
+    )
     cfg = RetryConfig(max_attempts=3, base_delay=0.1, max_delay=8)
     async with httpx.AsyncClient() as cl:
         resp = await get_with_retry(cl, URL, cfg=cfg)
@@ -97,6 +99,7 @@ def test_backoff_grows_and_is_capped():
 async def test_fetch_open_meteo_maps_cities_in_order():
     import json
     from pathlib import Path
+
     sample = json.loads((Path(__file__).parent.parent / "samples" / "open_meteo.json").read_text())
     respx.get(c.OPEN_METEO_URL).mock(return_value=httpx.Response(200, json=sample))
     async with httpx.AsyncClient() as cl:

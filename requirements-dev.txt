@@ -1,0 +1,8 @@
+# Everything needed to develop and test: install this locally and in CI.
+-r requirements.txt
+matplotlib>=3.9
+pytest>=8.0
+pytest-asyncio>=0.24
+pytest-cov>=5.0
+respx>=0.21
+ruff>=0.6

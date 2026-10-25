@@ -1,4 +1,5 @@
 """Turn API responses into tidy DataFrames (Asia/Kolkata, deduped, daily means)."""
+
 import pandas as pd
 
 from app.models import OpenAQHour, OpenMeteoLocation
@@ -6,6 +7,11 @@ from app.models import OpenAQHour, OpenMeteoLocation
 TZ = "Asia/Kolkata"
 MAX_PM25 = 1000.0  # above this a reading is treated as a sensor fault
 MIN_HOURS_PER_DAY = 18  # 75% hourly coverage needed for a daily mean
+
+
+def ist_today() -> pd.Timestamp:
+    """Today's date in IST as a naive midnight timestamp (same form as daily_mean's `date`)."""
+    return pd.Timestamp.now(tz=TZ).tz_localize(None).normalize()
 
 
 def open_meteo_to_frame(loc: OpenMeteoLocation) -> pd.DataFrame:
@@ -60,12 +66,14 @@ MIN_COVERAGE = 75.0  # drop hours where under 75% of expected readings arrived
 
 def openaq_to_frame(station: str, hours: list[OpenAQHour]) -> pd.DataFrame:
     """Hourly measured PM2.5 for one station; low-coverage hours become NaN."""
-    df = pd.DataFrame({
-        "station": station,
-        "timestamp": to_kolkata(pd.Series([h.period.datetimeFrom.utc for h in hours], dtype="object")),
-        "pm25": [h.value for h in hours],
-        "coverage": [h.coverage.percentComplete for h in hours],
-    })
+    df = pd.DataFrame(
+        {
+            "station": station,
+            "timestamp": to_kolkata(pd.Series([h.period.datetimeFrom.utc for h in hours], dtype="object")),
+            "pm25": [h.value for h in hours],
+            "coverage": [h.coverage.percentComplete for h in hours],
+        }
+    )
     df.loc[df["coverage"] < MIN_COVERAGE, "pm25"] = float("nan")
     return df
 
