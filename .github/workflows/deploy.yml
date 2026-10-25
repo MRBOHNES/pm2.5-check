@@ -41,6 +41,8 @@ jobs:
         with:
           node-version: 22
       - run: npm i -g vercel@latest
+      # `vercel build` for Python projects needs the uv package manager on PATH.
+      - run: pip install uv
       - run: vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
       - run: vercel build --prod --token="$VERCEL_TOKEN"
       - run: vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN"
