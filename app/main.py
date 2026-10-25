@@ -1,11 +1,14 @@
 """FastAPI app. Modelled data (Open-Meteo) for all cities; measured (OpenAQ) for Delhi."""
 import asyncio
 import os
+import re
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
 import httpx
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.analysis import (aqi_category, city_comparison, compare_model_measured,
@@ -25,7 +28,27 @@ async def lifespan(app: FastAPI):
         yield
 
 
+def cors_settings(raw: str) -> tuple[list[str], str | None]:
+    """Split a comma-separated ALLOWED_ORIGINS into exact origins and one regex.
+
+    An entry containing '*' is a pattern; '*' matches one host label (letters, digits, '-'),
+    never a dot, e.g. https://pm25-check-*-me.vercel.app.
+    """
+    exact, patterns = [], []
+    for item in (x.strip() for x in raw.split(",")):
+        if item:
+            (patterns if "*" in item else exact).append(item)
+    regex = "|".join(re.escape(p).replace(r"\*", "[A-Za-z0-9-]+") for p in patterns)
+    return exact, regex or None
+
+
+load_dotenv()
+_origins, _origin_regex = cors_settings(
+    os.getenv("ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"))
+
 app = FastAPI(title="PM2.5 check", lifespan=lifespan)
+app.add_middleware(CORSMiddleware, allow_origins=_origins, allow_origin_regex=_origin_regex,
+                   allow_methods=["GET"], allow_headers=["*"])
 
 
 @app.exception_handler(UpstreamError)

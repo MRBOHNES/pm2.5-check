@@ -8,7 +8,7 @@ import respx
 from fastapi.testclient import TestClient
 
 from app import client as c
-from app.main import app
+from app.main import app, cors_settings
 
 SAMPLE = json.loads((Path(__file__).parent.parent / "samples" / "open_meteo.json").read_text())
 
@@ -120,3 +120,19 @@ def test_cities_lists_supported_with_measured_flag(api):
     body = api.get("/cities").json()
     assert [c["name"] for c in body] == ["delhi", "chandigarh", "mumbai", "bengaluru"]
     assert [c["name"] for c in body if c["has_measured"]] == ["delhi"]
+
+
+def test_cors_settings_splits_exact_and_wildcard():
+    import re
+    exact, regex = cors_settings("https://a.example.com, https://pm25-*-me.vercel.app,")
+    assert exact == ["https://a.example.com"]
+    assert re.fullmatch(regex, "https://pm25-abc123-me.vercel.app")
+    assert not re.fullmatch(regex, "https://pm25-abc.evil.com-me.vercel.app")  # '*' never spans a dot
+    assert cors_settings("") == ([], None)
+
+
+def test_cors_allows_dev_origin_only(api):
+    ok = api.get("/health", headers={"Origin": "http://localhost:5173"})
+    assert ok.headers["access-control-allow-origin"] == "http://localhost:5173"
+    bad = api.get("/health", headers={"Origin": "https://evil.example"})
+    assert "access-control-allow-origin" not in bad.headers
