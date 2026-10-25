@@ -6,7 +6,9 @@
 Compares **modelled** PM2.5 (Open-Meteo, CAMS model) with **measured** PM2.5 (OpenAQ stations in Delhi), finds the
 worst day, and bins days into India's CPCB air-quality categories.
 
-**Live:** frontend and API links are added here after the first deploy (see [Deployment](#deployment)).
+**Live:** [pm2-5-check.vercel.app](https://pm2-5-check.vercel.app) (the page) and
+[pm2-5-check-api.vercel.app](https://pm2-5-check-api.vercel.app/docs) (the API, with interactive docs at `/docs`).
+The API sleeps when idle on the free plan, so the first request after a pause can take a few seconds.
 
 ![Desktop, light](docs/screenshots/desktop-light.png)
 
@@ -126,6 +128,15 @@ files), so nothing reaches production unless CI is green. Pull requests still ge
 
 Env var summary: backend `OPENAQ_API_KEY`, `ALLOWED_ORIGINS`; frontend `VITE_API_URL`. Examples in `.env.example` and
 `frontend/.env.example`.
+
+### Checking a deployment
+- **GitHub:** Actions → Deploy. Green means the build, the deploy and the smoke tests (`/health`, `/peak`, the page
+  title, and the backend address inside the built JS) all passed.
+- **Vercel:** each project's Deployments tab. The top row should say *Ready* and *Current* (Production), with
+  the commit you expect. Deployments made by the workflow show their source as the CLI; one made by a Git push
+  would show the branch, which means Vercel deployed on its own.
+- **Is the live version the latest?** `curl https://pm2-5-check-api.vercel.app/health` returns the deployed commit in
+  `version`. Compare it with `git rev-parse --short origin/main`.
 
 ### Rollback
 In Vercel, open each project → Deployments → pick the previous good production deployment → **Promote to Production**
