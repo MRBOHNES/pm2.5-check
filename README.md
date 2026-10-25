@@ -1,81 +1,161 @@
-# pm2.5-check: Delhi air quality, modelled vs measured
+# PM2.5 Check: can you trust the free air-quality numbers for Delhi?
 
-![tests](https://github.com/MRBOHNES/pm2.5-check/actions/workflows/tests.yml/badge.svg)
+[![CI](https://github.com/MRBOHNES/pm2.5-check/actions/workflows/ci.yml/badge.svg)](https://github.com/MRBOHNES/pm2.5-check/actions/workflows/ci.yml)
+[![Deploy](https://github.com/MRBOHNES/pm2.5-check/actions/workflows/deploy.yml/badge.svg)](https://github.com/MRBOHNES/pm2.5-check/actions/workflows/deploy.yml)
 
-How close is modelled PM2.5 (Open-Meteo / CAMS) to measured PM2.5 (OpenAQ stations),
-and how do Delhi, Chandigarh, Mumbai and Bengaluru compare on India's CPCB AQI categories?
+Compares **modelled** PM2.5 (Open-Meteo, CAMS model) with **measured** PM2.5 (OpenAQ stations in Delhi), finds the
+worst day, and bins days into India's CPCB air-quality categories.
 
-## Status
-All parts are done and tested (`pytest -q`). Model-vs-measured covers Delhi only, using five stations.
+**Live:** frontend and API links are added here after the first deploy (see [Deployment](#deployment)).
 
-## Run
-Needs Python 3.12+ and a free OpenAQ API key (create an account at https://explore.openaq.org and copy the key from your settings).
-The tests and the Open-Meteo parts need no key; only the Delhi measured data does.
+![Desktop, light](docs/screenshots/desktop-light.png)
 
-```
+<p>
+  <img src="docs/screenshots/mobile-light.png" alt="Mobile, light" width="260">
+  <img src="docs/screenshots/desktop-dark.png" alt="Desktop, dark mode" width="520">
+</p>
+
+## What it shows
+1. **Peak day** (last 30 days): highest daily PM2.5, its CPCB category, how many times India's 24-hour standard
+   it was, and how far the model was off that day.
+2. **Model vs measured chart** with the peak day shaded, the 60 µg/m³ standard, and MAE / correlation / bias.
+3. **CPCB category cards**: days spent in each of the six categories; the latest and the peak day's category are marked.
+4. **Limitations** with links to every source.
+
+Measured values exist for Delhi only (five stations). Other cities fall back to modelled values and say so.
+
+## Findings (last 30 days to 25 Oct 2026, Delhi)
+- **The model gets the shape right but misses the extremes.** Over 26 comparable days: MAE **17.0 µg/m³**, correlation
+  **r = 0.72**, average bias +3.3 µg/m³.
+- **The worst day was 21 Oct: 149.6 µg/m³ measured (Very Poor, 2.5x the standard) vs 91.8 modelled**, off by 57.8. A
+  ~45 km grid cell smooths out local peaks that point stations record. 21 Oct is also the only outlier day.
+- **Delhi was above India's 24-hour standard (60 µg/m³) on 17 of the 26 days with station data.**
+
+Numbers come from a live run on 26 Oct 2026 and change daily. 26 of 30 days have station data (see Limitations).
+
+## Run locally
+Needs Python 3.12+, Node 22+, and a free [OpenAQ API key](https://explore.openaq.org) (only the Delhi measured
+data needs it; the tests need no key and no network).
+
+```bash
 git clone https://github.com/MRBOHNES/pm2.5-check.git && cd pm2.5-check
-python -m venv .venv && .venv/bin/pip install -r requirements.txt
-cp .env.example .env          # then edit .env and set OPENAQ_API_KEY=<your key>
-.venv/bin/pytest -q                         # 48 tests, no network or key needed
-.venv/bin/python -m app.charts              # fetches live data, writes output/*.png
-.venv/bin/uvicorn app.main:app              # then open http://127.0.0.1:8000/docs
-```
-Endpoints: `/summary/delhi`, `/compare?cities=delhi,mumbai`, `/delhi/model-vs-measured`.
-`.env` is gitignored. Put the key only in `.env`, never in `.env.example`.
-The code asks for the last 7 days, so your numbers will differ from the findings below, which are for 17-23 Oct 2026.
 
-## Docker
-```
-docker build -t pm25-check .
-docker run -p 8000:8000 --env-file .env pm25-check
+# backend
+python -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
+cp .env.example .env                  # set OPENAQ_API_KEY=<your key>
+.venv/bin/uvicorn app.main:app        # http://127.0.0.1:8000/docs
+
+# frontend (second terminal)
+cd frontend && cp .env.example .env.local && npm ci && npm run dev    # http://localhost:5173
 ```
 
-## CI
-GitHub Actions runs `pytest -q` on every push and pull request (Python 3.12 and 3.14): `.github/workflows/tests.yml`.
-
-## Flow
+Tests and checks (the same ones CI runs):
+```bash
+.venv/bin/ruff check . && .venv/bin/ruff format --check .
+.venv/bin/pytest -q --cov=app --cov-fail-under=80      # 74 tests, ~85% coverage
+cd frontend && npm run lint && npm run typecheck && npm test -- --run && npm run build   # 22 tests
 ```
-Open-Meteo (1 call, 4 cities) + OpenAQ (5 Delhi stations, concurrent) -> pydantic models -> DataFrame (Asia/Kolkata)
-  -> clean (dedupe, bad values -> NaN) -> daily mean (>=18 valid hours)
-  -> CPCB category (np.select) -> charts / API
+`.env` is gitignored: the key lives only there (and in Vercel's settings), never in `.env.example`.
+
+**API:** `GET /peak?city=Delhi&days=30`, `GET /series?city=Delhi&days=30`, `GET /cities`, `GET /health`,
+plus `/summary/{city}`, `/compare?cities=delhi,mumbai`, `/delhi/model-vs-measured`.
+`python -m app.charts` writes two PNG charts to `output/`.
+
+**Docker** is for local runs and the CI check only; Vercel does not run the container:
+```bash
+docker build -t pm25-check . && docker run -p 8000:8000 --env-file .env pm25-check
 ```
 
-## Decisions
-- One shared `httpx.AsyncClient`; retry on 429, 5xx, timeouts; exponential backoff with jitter;
-  `Retry-After` honoured; other 4xx fail immediately. Timeout maps to HTTP 504, other upstream failure to 502.
-- Open-Meteo returns a bare list in request order with no city label, so cities are matched by position.
-- Open-Meteo snaps coordinates to its model grid (Delhi 28.6139 -> 28.6), so it is a grid-cell estimate, not a point reading.
-- No interpolation across gaps. A daily mean needs 18+ valid hours.
-- AQI edge handling: bands use inclusive upper bounds, so 30 is Good and 30.5 is Satisfactory.
+## How it works
+```
+Open-Meteo (1 call, 4 cities) --+                         +--> /peak ----+
+                                +--> pydantic models --> pandas (IST, dedupe, daily mean >= 18 h)
+OpenAQ (5 Delhi stations,   ----+      (retry, backoff,   +--> /series --+--> React + Recharts page
+ concurrent, paginated)                 concurrency cap)      CPCB category (np.select), MAE, r
+```
+- `app/client.py`: one shared async `httpx` client; retry on 429/5xx/timeouts with exponential backoff and jitter,
+  `Retry-After` honoured, other 4xx fail at once; a semaphore caps concurrency. Timeout becomes HTTP 504, other
+  upstream failures 502.
+- `app/cleaning.py`: timestamps to `Asia/Kolkata`, duplicates dropped, impossible values become NaN (never interpolated),
+  daily means need 18+ valid hours.
+- `app/analysis.py`: vectorised CPCB category (`np.select`, inclusive upper bounds so 30 is Good and 30.5 is
+  Satisfactory), MAE, Pearson r, z-score outliers, peak day (measured first, modelled fallback, ties go to the
+  earliest date, today excluded).
+- `app/cache.py`: best-effort 10-minute cache so `/peak` and `/series` share upstream calls.
+  **Serverless instances come and go, so nothing depends on it.**
+- `frontend/`: Vite + React + TypeScript; design tokens in `src/styles/tokens.css`; dark mode follows the OS.
 
-## Findings (17-23 Oct 2026)
-**Delhi, modelled vs measured** (daily means, measured = mean of 5 OpenAQ stations):
+## Deployment
+Two Vercel projects from this one repo, shipped only by GitHub Actions:
 
-![Delhi modelled vs measured](output/delhi_model_vs_measured.png)
+```
+push/merge to main --> CI (ruff, pytest>=80%, frontend checks, docker /health)
+                         |  success on main only
+                         v
+                  Deploy workflow --> backend project (FastAPI, repo root)  --> smoke test /health + /peak
+                                  --> frontend project (Vite, frontend/)    --> smoke test page text
+```
+Vercel's own Git production deploys are switched off (`git.deploymentEnabled` for `main` in both `vercel.json`
+files), so nothing reaches production unless CI is green. Pull requests still get Vercel preview deployments.
 
-1. **The model tracks Delhi only loosely.** Over the 6 days with valid data, MAE is 22 ug/m3, Pearson r is 0.22
-   and bias is -16 ug/m3 (the model reads lower than the stations). With 6 points, r is a weak signal.
-2. **The model misses the pollution peak.** On 21 Oct stations averaged 149.6 ug/m3 (Very Poor) while the model said
-   91.8 (Poor); on 22 Oct it was 124.7 measured vs 95.8 modelled. The model agreed closely on 19 Oct (74.7 vs 73.3)
-   and 23 Oct (100.6 vs 97.3). A ~45 km grid cell smooths out local peaks that point stations record.
-3. **City comparison (modelled):** Delhi mean 88.8 ug/m3 (5 of 8 days Poor), Mumbai 88.3, Chandigarh 34.7,
-   Bengaluru 11.4 (Good on all 8 days). Delhi and Mumbai have nearly the same mean with opposite trends.
+### One-time setup (you do this in the dashboards)
+1. **Backend project.** Vercel → Add New → Project → import this repo. Name it e.g. `pm25-check-api`.
+   Root Directory `./`, Framework Preset **FastAPI** (Vercel finds `app` in `app/main.py`; Python comes from
+   `.python-version`). Add env vars: `OPENAQ_API_KEY` (Production **and** Preview) and `ALLOWED_ORIGINS` (below).
+2. **Frontend project.** Import the same repo again, e.g. `pm25-check-web`. Root Directory `frontend`, preset **Vite**.
+   Add `VITE_API_URL` = the backend's production URL, no trailing slash (Production **and** Preview).
+3. **Allowed origins.** `ALLOWED_ORIGINS` is comma-separated; `*` matches one host label, never a dot:
+   `https://pm25-check-web.vercel.app,https://pm25-check-web-*-<your-team-slug>.vercel.app`
+   (production domain, then preview deployments). Keep it narrow; do not use `https://*.vercel.app`.
+4. **Token and IDs.** Create a token (Account Settings → Tokens). Project IDs and the Org ID are in each project's
+   Settings → General (or `.vercel/project.json` after `vercel link`).
+5. **GitHub secrets** (Settings → Secrets and variables → Actions). Names only here, never values:
 
-![Daily modelled PM2.5 by city](output/daily_trend_modelled.png)
+   | Secret | What |
+   |---|---|
+   | `VERCEL_TOKEN` | the token from step 4 |
+   | `VERCEL_ORG_ID` | team/user ID |
+   | `VERCEL_PROJECT_ID_BACKEND` | backend project ID |
+   | `VERCEL_PROJECT_ID_FRONTEND` | frontend project ID |
+   | `BACKEND_URL` | backend production URL, used by the smoke test |
+   | `FRONTEND_URL` (optional) | frontend production URL; if unset the smoke test uses the fresh deployment URL, which can sit behind Vercel's deployment protection |
+
+6. **First deploy.** Actions → Deploy → Run workflow, or merge to `main`.
+7. **Branch protection** (Settings → Branches → Add rule for `main`): require a pull request, require status checks
+   `backend (3.12)`, `backend (3.14)`, `frontend` and `docker` to pass, and block direct pushes.
+
+Env var summary: backend `OPENAQ_API_KEY`, `ALLOWED_ORIGINS`; frontend `VITE_API_URL`. Examples in `.env.example` and
+`frontend/.env.example`.
+
+### Rollback
+In Vercel, open each project → Deployments → pick the previous good production deployment → **Promote to Production**
+(do the backend and frontend separately). Then fix forward with a pull request, or `git revert <commit>` and merge it.
+
+### Free-plan notes
+Vercel Hobby functions can take a moment on a cold start; the page shows "Waking up the server…" after 3 seconds.
+The function allows up to 60 s per request (a 30-day fetch from five stations takes about 3 s warm).
+Hobby is for non-commercial use.
 
 ## Limitations
-- Six comparable days is too few for firm conclusions about model accuracy or any season.
-- 18 Oct has no measured value: every station reported only 14 hours that day, below the 18-hour rule.
-  23 Oct data ends at 21:00 IST, and stations with fewer than 18 valid hours that day are excluded.
-- Five hand-picked stations (R K Puram, Punjabi Bagh, Pusa, Mandir Marg, Anand Vihar), not a full network.
-  Older sensor ids on the same stations return no data, so live sensor ids are pinned.
-- Modelled values are one grid cell; stations are points. Part of the gap is that mismatch, not model error.
-- Modelled window includes forecast hours for the current day.
-- Category bands confirmed from secondary sources, not the official CPCB document.
-  CPCB's official label for 61-90 is "Moderately polluted".
+- **Modelled is not measured.** Open-Meteo gives CAMS model values on a ~45 km grid cell (it snaps coordinates to that
+  grid); stations read at a point. Part of the gap is that mismatch, not model error.
+- **Five hand-picked Delhi stations** (R K Puram, Punjabi Bagh, Pusa, Mandir Marg, Anand Vihar), not a full network.
+  Other cities have no station data here.
+- **Station feeds lag.** The latest days often have too few readings (daily means need 18 hours), so the last 1-2 days
+  usually show modelled values only.
+- **Thirty days** is too few to say how the model behaves across seasons.
+- **Colours.** Category names and PM2.5 bands follow CPCB; the colours are adjusted for text contrast (all pass WCAG AA)
+  and I could not check them against CPCB's official scale. CPCB's official label for 61-90 is "Moderately polluted";
+  this app says "Moderate".
+- 60 µg/m³ is the 24-hour PM2.5 limit in India's 2009 national standards. I did not check for later revisions.
 
-## Next steps
-Cover Chandigarh, Mumbai and Bengaluru with measured stations, use a longer window (a month or a season),
-and check the bands against the official CPCB document.
+## What I'd add next
+Station data for more cities, a longer window (a season), a city comparison chart, an outlier table, Dependabot,
+preview-URL comments on pull requests, structured request logs, and a multi-stage non-root Docker image.
 
-CPCB National AQI: https://cpcb.nic.in/national-air-quality-index/
+## Sources
+- Open-Meteo Air Quality API: https://open-meteo.com/en/docs/air-quality-api
+- OpenAQ API: https://docs.openaq.org
+- CPCB National AQI: https://cpcb.nic.in/national-air-quality-index/
+- India's 2009 air quality standards (CPCB notification B-29016/20/90/PCI-L, 18 Nov 2009):
+  https://leap.unep.org/akn/in/act/2009/b-29016-20-90-pci-l/eng@2009-11-18
