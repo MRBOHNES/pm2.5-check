@@ -130,3 +130,14 @@ body {
 
 .legend { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px 24px; }
 .legend li { display: flex; align-items: center; gap: 8px; }
+
+.skeleton { display: grid; align-items: center; padding: 32px; }
+.skeleton p { margin: 0; }
+.limits { display: grid; gap: 24px; grid-template-columns: 1.4fr 1fr; }
+.bullets, .links { margin: 0; padding-left: 20px; display: grid; gap: 12px; align-content: start; }
+.links { list-style: none; padding: 0; }
+.links a { color: var(--text); text-underline-offset: 3px; }
+.links a:focus-visible, .btn:focus-visible, select:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+@media (max-width: 768px) {
+  .limits { grid-template-columns: 1fr; }
+}

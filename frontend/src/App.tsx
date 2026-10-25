@@ -1,9 +1,12 @@
 import { useState } from "react";
-import { fetchCities, fetchPeak, fetchSeries } from "./api";
+import { BASE, fetchCities, fetchPeak, fetchSeries } from "./api";
 import { CategoryCards } from "./components/CategoryCards";
+import { ErrorCard } from "./components/ErrorCard";
 import { Header } from "./components/Header";
+import { Limitations } from "./components/Limitations";
 import { ModelVsMeasuredChart } from "./components/ModelVsMeasuredChart";
 import { PeakCard } from "./components/PeakCard";
+import { Skeleton } from "./components/Skeleton";
 import { StatsPanel } from "./components/StatsPanel";
 import { slug } from "./format";
 import { useAsync } from "./useAsync";
@@ -18,6 +21,7 @@ export default function App() {
 
   const series = useAsync((signal) => fetchSeries(city, DAYS, signal), `${city}:${attempt}`);
 
+  const retry = () => setAttempt((n) => n + 1);
   const category = peak.status === "ok" ? peak.data.peak?.category : undefined;
   return (
     <>
@@ -25,13 +29,9 @@ export default function App() {
       <main className={`hero ${category ? `haze-${slug(category)}` : ""}`}>
         <div className="container">
           <h1 className="display hero__headline">Can you trust the free air-quality numbers for Delhi?</h1>
-          {peak.status === "loading" && <div className="skeleton" role="status" aria-label="Loading peak day" />}
+          {peak.status === "loading" && <Skeleton label="Loading peak day" />}
           {peak.status === "error" && (
-            <section className="card notice" role="alert">
-              <p className="h3">Couldn&apos;t load the peak day</p>
-              <p className="muted">{peak.error.message}.</p>
-              <button className="btn" onClick={() => setAttempt((n) => n + 1)}>Try again</button>
-            </section>
+            <ErrorCard title="Couldn't load the peak day" message={peak.error.message} onRetry={retry} />
           )}
           {peak.status === "ok" && <PeakCard data={peak.data} />}
         </div>
@@ -42,14 +42,17 @@ export default function App() {
             <h2 className="h2">Model vs measured</h2>
             <p className="muted">Daily PM2.5 over the last {DAYS} days, with the peak day marked.</p>
           </div>
-          {series.status === "loading" && <div className="skeleton" role="status" aria-label="Loading chart" />}
+          {series.status === "loading" && <Skeleton label="Loading chart" />}
           {series.status === "error" && (
-            <section className="card notice" role="alert">
-              <p className="h3">Couldn&apos;t load the chart</p>
-              <p className="muted">{series.error.message}.</p>
+            <ErrorCard title="Couldn't load the chart" message={series.error.message} onRetry={retry} />
+          )}
+          {series.status === "ok" && series.data.source === null && (
+            <section className="card notice">
+              <p className="h3">No daily values yet</p>
+              <p className="muted">No day in the last {DAYS} days has enough readings to plot.</p>
             </section>
           )}
-          {series.status === "ok" && (
+          {series.status === "ok" && series.data.source !== null && (
             <div className="chart-row">
               <ModelVsMeasuredChart data={series.data} peak={peak.status === "ok" ? peak.data.peak : null} />
               <StatsPanel stats={series.data.stats} />
@@ -57,7 +60,7 @@ export default function App() {
           )}
         </div>
       </section>
-      {series.status === "ok" && (
+      {series.status === "ok" && series.data.source !== null && (
         <section className="section">
           <div className="container">
             <div className="section__head">
@@ -70,6 +73,7 @@ export default function App() {
           </div>
         </section>
       )}
+      <Limitations apiUrl={BASE} />
     </>
   );
 }

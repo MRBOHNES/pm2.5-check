@@ -1,6 +1,6 @@
 import type { City, PeakResponse, SeriesResponse } from "./types";
 
-const BASE = (import.meta.env.VITE_API_URL ?? "http://localhost:8000").replace(/\/$/, "");
+export const BASE = (import.meta.env.VITE_API_URL ?? "http://localhost:8000").replace(/\/$/, "");
 const TIMEOUT_MS = 60_000; // generous: a cold serverless start plus a 30-day OpenAQ fetch
 
 export class ApiError extends Error {

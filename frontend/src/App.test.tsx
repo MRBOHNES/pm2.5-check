@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import App from "./App";
 
 const CITIES = [{ name: "delhi", label: "Delhi", has_measured: true }];
@@ -41,7 +41,10 @@ test("shows an error with a retry button when the backend fails", async () => {
   render(<App />);
   const alerts = await screen.findAllByRole("alert"); // peak card and chart each report the failure
   expect(alerts[0]).toHaveTextContent("The server answered 502");
-  expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
+  const retries = screen.getAllByRole("button", { name: "Try again" });
+  const callsBefore = vi.mocked(fetch).mock.calls.length;
+  retries[0].click(); // either button re-runs both requests
+  await waitFor(() => expect(vi.mocked(fetch).mock.calls.length).toBeGreaterThan(callsBefore));
 });
 
 test("shows the category cards once the series has loaded", async () => {
@@ -50,4 +53,21 @@ test("shows the category cards once the series has loaded", async () => {
   expect(await screen.findByRole("heading", { name: "Days in each CPCB category" })).toBeInTheDocument();
   const cards = screen.getByRole("list", { name: "Days in each CPCB category" });
   expect(within(cards).getAllByRole("listitem")).toHaveLength(6);
+});
+
+test("shows an empty state instead of a chart when no day has data", async () => {
+  stubFetch();
+  const empty = { ...SERIES, source: null, series: [], latest_day: null };
+  const base = fetch as unknown as (url: URL) => Promise<Response>;
+  vi.stubGlobal("fetch", vi.fn(async (url: URL) =>
+    url.pathname === "/series" ? ({ ok: true, status: 200, json: async () => empty } as Response) : base(url)));
+  render(<App />);
+  expect(await screen.findByText("No daily values yet")).toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: "Days in each CPCB category" })).not.toBeInTheDocument();
+});
+
+test("always shows the limitations section", async () => {
+  stubFetch();
+  render(<App />);
+  expect(screen.getByRole("heading", { name: "Limitations" })).toBeInTheDocument();
 });
