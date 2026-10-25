@@ -3,6 +3,7 @@
 On serverless every instance has its own copy and it disappears with the instance,
 so this only saves repeat calls while an instance stays warm. Never rely on it.
 """
+
 import asyncio
 import time
 from collections.abc import Awaitable, Callable

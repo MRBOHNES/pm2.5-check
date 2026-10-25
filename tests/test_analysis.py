@@ -2,17 +2,39 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from app.analysis import (aqi_category, category_counts, city_comparison, compare_model_measured,
-                          correlation, latest_day, mae, model_stats, peak_day, pick_source,
-                          zscore_outliers)
+from app.analysis import (
+    aqi_category,
+    category_counts,
+    city_comparison,
+    compare_model_measured,
+    correlation,
+    latest_day,
+    mae,
+    model_stats,
+    peak_day,
+    pick_source,
+    zscore_outliers,
+)
 
 
-@pytest.mark.parametrize("value,label", [
-    (0, "Good"), (30, "Good"), (30.5, "Satisfactory"), (31, "Satisfactory"),
-    (60, "Satisfactory"), (61, "Moderate"), (90, "Moderate"), (91, "Poor"),
-    (120, "Poor"), (121, "Very Poor"), (250, "Very Poor"), (251, "Severe"),
-    (900, "Severe"),
-])
+@pytest.mark.parametrize(
+    "value,label",
+    [
+        (0, "Good"),
+        (30, "Good"),
+        (30.5, "Satisfactory"),
+        (31, "Satisfactory"),
+        (60, "Satisfactory"),
+        (61, "Moderate"),
+        (90, "Moderate"),
+        (91, "Poor"),
+        (120, "Poor"),
+        (121, "Very Poor"),
+        (250, "Very Poor"),
+        (251, "Severe"),
+        (900, "Severe"),
+    ],
+)
 def test_aqi_edges(value, label):
     assert aqi_category([value])[0] == label
 
@@ -41,31 +63,48 @@ def test_zscore_outliers():
 
 
 def test_compare_model_measured():
-    d = pd.DataFrame({"date": pd.date_range("2026-01-01", periods=3),
-                      "modelled": [100.0, 110.0, np.nan], "measured": [90.0, 100.0, 50.0]})
+    d = pd.DataFrame(
+        {
+            "date": pd.date_range("2026-01-01", periods=3),
+            "modelled": [100.0, 110.0, np.nan],
+            "measured": [90.0, 100.0, 50.0],
+        }
+    )
     r = compare_model_measured(d)
     assert r["days"] == 2 and r["mae"] == 10 and r["bias"] == 10
 
 
 def test_city_comparison_counts():
-    d = pd.DataFrame({"city": ["a", "a", "b"], "date": pd.date_range("2026-01-01", periods=3),
-                      "pm25": [20.0, 300.0, 70.0]})
+    d = pd.DataFrame(
+        {"city": ["a", "a", "b"], "date": pd.date_range("2026-01-01", periods=3), "pm25": [20.0, 300.0, 70.0]}
+    )
     out = city_comparison(d).set_index("city")
     assert out.loc["a", "Good"] == 1 and out.loc["a", "Severe"] == 1
     assert out.loc["b", "Moderate"] == 1 and out.loc["b", "days"] == 1
 
 
 def _daily(modelled, measured):
-    return pd.DataFrame({"date": pd.date_range("2026-01-01", periods=len(modelled)),
-                         "modelled": modelled, "measured": measured})
+    return pd.DataFrame(
+        {
+            "date": pd.date_range("2026-01-01", periods=len(modelled)),
+            "modelled": modelled,
+            "measured": measured,
+        }
+    )
 
 
 def test_peak_prefers_measured_and_reports_details():
     out = peak_day(_daily([50.0, 80.0, 300.0], [40.0, 126.0, 100.0]), days=3)
     assert out["source"] == "measured" and out["days_compared"] == 3
-    assert out["peak"] == {"date": "2026-01-02", "value": 126.0, "measured": 126.0,
-                           "modelled": 80.0, "difference": -46.0, "category": "Very Poor",
-                           "ratio_to_standard": 2.1}
+    assert out["peak"] == {
+        "date": "2026-01-02",
+        "value": 126.0,
+        "measured": 126.0,
+        "modelled": 80.0,
+        "difference": -46.0,
+        "category": "Very Poor",
+        "ratio_to_standard": 2.1,
+    }
     assert out["standard"] == 60 and out["window_days"] == 3
 
 

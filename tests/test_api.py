@@ -64,7 +64,8 @@ def test_delhi_model_vs_measured(api, monkeypatch):
     monkeypatch.setattr("app.main.window_utc", lambda: ("a", "b"))
     respx.get(c.OPEN_METEO_URL).mock(return_value=httpx.Response(200, json=SAMPLE))
     respx.get(url__regex=rf"{c.OPENAQ_URL}/sensors/\d+/hours").mock(
-        return_value=httpx.Response(200, json=HOURS))
+        return_value=httpx.Response(200, json=HOURS)
+    )
     body = api.get("/delhi/model-vs-measured").json()
     assert "measured" in body["measured_source"] and "modelled" in body["modelled_source"]
     assert body["stats"]["days"] >= 1 and body["stats"]["mae"] >= 0
@@ -85,7 +86,8 @@ def _peak_setup(monkeypatch):
     monkeypatch.setattr("app.main.ist_today", lambda: pd.Timestamp("2026-10-24"))
     respx.get(c.OPEN_METEO_URL).mock(return_value=httpx.Response(200, json=SAMPLE))
     respx.get(url__regex=rf"{c.OPENAQ_URL}/sensors/\d+/hours").mock(
-        return_value=httpx.Response(200, json=HOURS))
+        return_value=httpx.Response(200, json=HOURS)
+    )
 
 
 @respx.mock
@@ -124,6 +126,7 @@ def test_cities_lists_supported_with_measured_flag(api):
 
 def test_cors_settings_splits_exact_and_wildcard():
     import re
+
     exact, regex = cors_settings("https://a.example.com, https://pm25-*-me.vercel.app,")
     assert exact == ["https://a.example.com"]
     assert re.fullmatch(regex, "https://pm25-abc123-me.vercel.app")

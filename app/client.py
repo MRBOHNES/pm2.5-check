@@ -1,10 +1,11 @@
 """Async HTTP client: timeout, retry with backoff, concurrency cap."""
+
 import asyncio
 import os
 import random
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
-from dataclasses import dataclass
 
 import httpx
 from dotenv import load_dotenv
@@ -124,7 +125,7 @@ async def fetch_open_meteo(
     locations = TypeAdapter(OpenMeteoResponse).validate_python(resp.json())
     if len(locations) != len(cities):
         raise UpstreamError(f"expected {len(cities)} locations, got {len(locations)}")
-    return dict(zip(cities, locations))
+    return dict(zip(cities, locations, strict=True))
 
 
 def openaq_headers() -> dict[str, str]:
@@ -150,8 +151,14 @@ async def fetch_sensor_hours(
     page = 1
     while True:
         params = {"datetime_from": start_utc, "datetime_to": end_utc, "limit": limit, "page": page}
-        resp = await get_with_retry(client, f"{OPENAQ_URL}/sensors/{sensor_id}/hours",
-                                    params=params, headers=openaq_headers(), cfg=cfg, sem=sem)
+        resp = await get_with_retry(
+            client,
+            f"{OPENAQ_URL}/sensors/{sensor_id}/hours",
+            params=params,
+            headers=openaq_headers(),
+            cfg=cfg,
+            sem=sem,
+        )
         batch = OpenAQHoursResponse.model_validate(resp.json()).results
         rows += batch
         if len(batch) < limit:
@@ -169,11 +176,10 @@ async def fetch_delhi_measured(
     """Fetch every station's hours concurrently (capped by one shared semaphore)."""
     cfg = cfg or RetryConfig()
     sem = asyncio.Semaphore(cfg.max_concurrency)
-    results = await asyncio.gather(*(
-        fetch_sensor_hours(client, sid, start_utc, end_utc, cfg=cfg, sem=sem)
-        for sid in stations.values()
-    ))
-    return dict(zip(stations, results))
+    results = await asyncio.gather(
+        *(fetch_sensor_hours(client, sid, start_utc, end_utc, cfg=cfg, sem=sem) for sid in stations.values())
+    )
+    return dict(zip(stations, results, strict=True))
 
 
 def window_utc(past_days: int = 7) -> tuple[str, str]:

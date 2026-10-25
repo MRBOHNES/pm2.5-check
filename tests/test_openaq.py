@@ -39,11 +39,13 @@ def test_missing_key_raises(monkeypatch):
 @respx.mock
 async def test_pagination_follows_pages_and_sends_key():
     rows = HOURS["results"]
-    route = respx.get(f"{c.OPENAQ_URL}/sensors/1/hours").mock(side_effect=[
-        httpx.Response(200, json=_page(rows[:2])),
-        httpx.Response(200, json=_page(rows[2:4])),
-        httpx.Response(200, json=_page(rows[4:5])),
-    ])
+    route = respx.get(f"{c.OPENAQ_URL}/sensors/1/hours").mock(
+        side_effect=[
+            httpx.Response(200, json=_page(rows[:2])),
+            httpx.Response(200, json=_page(rows[2:4])),
+            httpx.Response(200, json=_page(rows[4:5])),
+        ]
+    )
     async with httpx.AsyncClient() as cl:
         out = await c.fetch_sensor_hours(cl, 1, "a", "b", limit=2)
     assert len(out) == 5
@@ -54,7 +56,8 @@ async def test_pagination_follows_pages_and_sends_key():
 @respx.mock
 async def test_fetch_delhi_measured_keys_by_station():
     respx.get(url__regex=rf"{c.OPENAQ_URL}/sensors/\d+/hours").mock(
-        return_value=httpx.Response(200, json=HOURS))
+        return_value=httpx.Response(200, json=HOURS)
+    )
     async with httpx.AsyncClient() as cl:
         out = await c.fetch_delhi_measured(cl, "a", "b")
     assert list(out) == list(c.DELHI_STATIONS)

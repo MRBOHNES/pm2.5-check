@@ -1,15 +1,18 @@
 """Pydantic models for API responses (fields taken from samples/)."""
+
 from pydantic import BaseModel
 
 
 class OpenMeteoHourly(BaseModel):
     """Parallel hourly arrays; None marks a missing value."""
+
     time: list[str]  # local ISO strings, no tz suffix (tz is in the parent)
     pm2_5: list[float | None]
 
 
 class OpenMeteoLocation(BaseModel):
     """One city's entry in the Open-Meteo list. Modelled data, not measured."""
+
     latitude: float  # snapped to the model grid, not the lat we asked for
     longitude: float
     elevation: float
@@ -25,6 +28,7 @@ OpenMeteoResponse = list[OpenMeteoLocation]
 
 
 # ---- OpenAQ v3 (measured). Fields taken from samples/openaq_*.json ----
+
 
 class OpenAQMeta(BaseModel):
     page: int
@@ -49,6 +53,7 @@ class OpenAQCoverage(BaseModel):
 
 class OpenAQHour(BaseModel):
     """One hourly PM2.5 average for one sensor."""
+
     value: float
     period: OpenAQPeriod
     coverage: OpenAQCoverage

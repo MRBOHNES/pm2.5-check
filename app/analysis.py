@@ -1,4 +1,5 @@
 """NumPy / pandas analysis: AQI categories, model-vs-measured stats, city comparison."""
+
 import numpy as np
 import pandas as pd
 
@@ -63,8 +64,7 @@ def city_comparison(daily: pd.DataFrame) -> pd.DataFrame:
     """daily has city, date, pm25. One row per city: mean and days in each category."""
     d = daily.dropna(subset=["pm25"]).copy()
     d["category"] = aqi_category(d["pm25"])
-    counts = d.pivot_table(index="city", columns="category", values="pm25",
-                           aggfunc="count", fill_value=0)
+    counts = d.pivot_table(index="city", columns="category", values="pm25", aggfunc="count", fill_value=0)
     counts = counts.reindex(columns=AQI_LABELS, fill_value=0)
     out = d.groupby("city")["pm25"].agg(mean_pm25="mean", days="count")
     return out.join(counts).reset_index()
@@ -86,7 +86,7 @@ def round_or_none(x: float, digits: int = 1) -> float | None:
 
 
 def pick_source(daily: pd.DataFrame) -> str:
-    """"measured" when any station value exists in the frame, else "modelled"."""
+    """ "measured" when any station value exists in the frame, else "modelled"."""
     return "measured" if daily["measured"].notna().any() else "modelled"
 
 
@@ -103,8 +103,11 @@ def latest_day(daily: pd.DataFrame, source: str) -> dict | None:
         return None
     row = d.iloc[-1]
     value = float(row[source])
-    return {"date": str(row["date"].date()), "value": round(value, 1),
-            "category": str(aqi_category([value])[0])}
+    return {
+        "date": str(row["date"].date()),
+        "value": round(value, 1),
+        "category": str(aqi_category([value])[0]),
+    }
 
 
 def model_stats(daily: pd.DataFrame) -> dict | None:
@@ -113,9 +116,13 @@ def model_stats(daily: pd.DataFrame) -> dict | None:
         return None
     s = compare_model_measured(daily)
     r = s["correlation"]
-    return {"days": s["days"], "mae": round(s["mae"], 1), "bias": round(s["bias"], 1),
-            "correlation": None if r is None or np.isnan(r) else round(r, 2),
-            "outlier_dates": s["outlier_dates"]}
+    return {
+        "days": s["days"],
+        "mae": round(s["mae"], 1),
+        "bias": round(s["bias"], 1),
+        "correlation": None if r is None or np.isnan(r) else round(r, 2),
+        "outlier_dates": s["outlier_dates"],
+    }
 
 
 def peak_day(daily: pd.DataFrame, days: int, today: pd.Timestamp | None = None) -> dict:
@@ -130,11 +137,19 @@ def peak_day(daily: pd.DataFrame, days: int, today: pd.Timestamp | None = None) 
         d = d[d["date"] < today].reset_index(drop=True)
     source = pick_source(d)
     values = d[source]
-    out = {"standard": INDIA_24H_STANDARD, "window_days": days, "source": source,
-           "days_compared": int(values.notna().sum())}
+    out = {
+        "standard": INDIA_24H_STANDARD,
+        "window_days": days,
+        "source": source,
+        "days_compared": int(values.notna().sum()),
+    }
     if out["days_compared"] == 0:
-        return {**out, "source": None, "peak": None,
-                "reason": f"no valid daily PM2.5 values in the last {days} days"}
+        return {
+            **out,
+            "source": None,
+            "peak": None,
+            "reason": f"no valid daily PM2.5 values in the last {days} days",
+        }
     row = d.loc[values.idxmax()]  # idxmax skips NaN and returns the first maximum
     value = float(row[source])
     out["peak"] = {
