@@ -8,6 +8,11 @@ MAX_PM25 = 1000.0  # above this a reading is treated as a sensor fault
 MIN_HOURS_PER_DAY = 18  # 75% hourly coverage needed for a daily mean
 
 
+def ist_today() -> pd.Timestamp:
+    """Today's date in IST as a naive midnight timestamp (same form as daily_mean's `date`)."""
+    return pd.Timestamp.now(tz=TZ).tz_localize(None).normalize()
+
+
 def open_meteo_to_frame(loc: OpenMeteoLocation) -> pd.DataFrame:
     """Hourly modelled PM2.5 with tz-aware timestamps."""
     df = pd.DataFrame({"timestamp": loc.hourly.time, "pm25": loc.hourly.pm2_5})

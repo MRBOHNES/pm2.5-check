@@ -75,3 +75,42 @@ def model_vs_measured(modelled: pd.DataFrame, measured: pd.DataFrame) -> pd.Data
     m = modelled[["date", "pm25"]].rename(columns={"pm25": "modelled"})
     o = measured[["date", "pm25"]].rename(columns={"pm25": "measured"})
     return m.merge(o, on="date", how="inner")
+
+
+INDIA_24H_STANDARD = 60  # ug/m3, 24-hour PM2.5 limit in India's 2009 NAAQS
+
+
+def _round_or_none(x: float, digits: int = 1) -> float | None:
+    """NaN becomes None (JSON null); anything else is rounded."""
+    return None if pd.isna(x) else round(float(x), digits)
+
+
+def peak_day(daily: pd.DataFrame, days: int, today: pd.Timestamp | None = None) -> dict:
+    """Highest daily PM2.5 in the window. daily has columns date, modelled, measured.
+
+    Uses measured values when any exist, otherwise falls back to modelled and says so.
+    Days on or after `today` are dropped: today is still in progress (or forecast).
+    Ties go to the earliest date because the frame is sorted by date first.
+    """
+    d = daily.sort_values("date").reset_index(drop=True)
+    if today is not None:
+        d = d[d["date"] < today].reset_index(drop=True)
+    source = "measured" if d["measured"].notna().any() else "modelled"
+    values = d[source]
+    out = {"standard": INDIA_24H_STANDARD, "window_days": days, "source": source,
+           "days_compared": int(values.notna().sum())}
+    if out["days_compared"] == 0:
+        return {**out, "source": None, "peak": None,
+                "reason": f"no valid daily PM2.5 values in the last {days} days"}
+    row = d.loc[values.idxmax()]  # idxmax skips NaN and returns the first maximum
+    value = float(row[source])
+    out["peak"] = {
+        "date": str(row["date"].date()),
+        "value": round(value, 1),
+        "measured": _round_or_none(row["measured"]),
+        "modelled": _round_or_none(row["modelled"]),
+        "difference": _round_or_none(row["modelled"] - row["measured"]),  # + = model higher
+        "category": str(aqi_category([value])[0]),
+        "ratio_to_standard": round(value / INDIA_24H_STANDARD, 1),
+    }
+    return out

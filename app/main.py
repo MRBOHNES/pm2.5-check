@@ -1,16 +1,21 @@
 """FastAPI app. Modelled data (Open-Meteo) for all cities; measured (OpenAQ) for Delhi."""
 import asyncio
+import os
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 
 import httpx
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
-from app.analysis import aqi_category, city_comparison, compare_model_measured, model_vs_measured
+from app.analysis import (aqi_category, city_comparison, compare_model_measured,
+                          model_vs_measured, peak_day)
 from app.client import CITIES, UpstreamError, fetch_delhi_measured, fetch_open_meteo, window_utc
-from app.cleaning import measured_daily, modelled_daily
+from app.cleaning import ist_today, measured_daily, modelled_daily
 
 SOURCE = "modelled (Open-Meteo / CAMS)"
+MEASURED_CITY = "delhi"  # OpenAQ stations are only configured for Delhi
+MAX_DAYS = 92  # Open-Meteo's past_days limit
 
 
 @asynccontextmanager
@@ -34,6 +39,14 @@ async def upstream_error(_: Request, exc: UpstreamError) -> JSONResponse:
 async def missing_config(_: Request, exc: RuntimeError) -> JSONResponse:
     """E.g. OPENAQ_API_KEY not set."""
     return JSONResponse({"detail": str(exc)}, status_code=503)
+
+
+def _check_city(city: str) -> str:
+    """Lower-case the name or raise 404 if the backend doesn't support it."""
+    name = city.strip().lower()
+    if name not in CITIES:
+        raise HTTPException(404, f"unknown city: {name}; try {list(CITIES)}")
+    return name
 
 
 async def _daily(request: Request, cities: list[str]):
@@ -86,3 +99,36 @@ async def compare(request: Request, cities: str = Query(",".join(CITIES))) -> di
     daily = await _daily(request, names)
     table = city_comparison(daily).round(1)
     return {"source": SOURCE, "cities": table.to_dict(orient="records")}
+
+
+@app.get("/health")
+async def health() -> dict:
+    """Liveness check. Makes no upstream calls."""
+    sha = os.getenv("VERCEL_GIT_COMMIT_SHA") or os.getenv("GIT_SHA") or "dev"
+    return {"status": "ok", "version": sha[:7], "time": datetime.now(timezone.utc).isoformat()}
+
+
+@app.get("/cities")
+async def cities() -> list[dict]:
+    """Cities the backend supports; has_measured says whether station data exists."""
+    return [{"name": c, "label": c.title(), "has_measured": c == MEASURED_CITY} for c in CITIES]
+
+
+@app.get("/peak")
+async def peak(request: Request, city: str = "Delhi", days: int = Query(30, ge=1, le=MAX_DAYS)) -> dict:
+    """Peak daily PM2.5 over the last `days` days (measured if available, else modelled)."""
+    name = _check_city(city)
+    client = request.app.state.client
+    if name == MEASURED_CITY:
+        start, end = window_utc(days)
+        locations, hours = await asyncio.gather(
+            fetch_open_meteo(client, past_days=days), fetch_delhi_measured(client, start, end))
+    else:
+        locations, hours = await fetch_open_meteo(client, past_days=days), None
+    modelled = modelled_daily({name: locations[name]})[["date", "pm25"]].rename(columns={"pm25": "modelled"})
+    if hours is None:
+        daily = modelled.assign(measured=float("nan"))
+    else:
+        measured = measured_daily(hours)[["date", "pm25"]].rename(columns={"pm25": "measured"})
+        daily = modelled.merge(measured, on="date", how="left")  # keep days without station data
+    return {"city": name, **peak_day(daily, days, today=ist_today())}

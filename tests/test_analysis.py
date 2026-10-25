@@ -3,7 +3,7 @@ import pandas as pd
 import pytest
 
 from app.analysis import (aqi_category, city_comparison, compare_model_measured,
-                          correlation, mae, zscore_outliers)
+                          correlation, mae, peak_day, zscore_outliers)
 
 
 @pytest.mark.parametrize("value,label", [
@@ -52,3 +52,46 @@ def test_city_comparison_counts():
     out = city_comparison(d).set_index("city")
     assert out.loc["a", "Good"] == 1 and out.loc["a", "Severe"] == 1
     assert out.loc["b", "Moderate"] == 1 and out.loc["b", "days"] == 1
+
+
+def _daily(modelled, measured):
+    return pd.DataFrame({"date": pd.date_range("2026-01-01", periods=len(modelled)),
+                         "modelled": modelled, "measured": measured})
+
+
+def test_peak_prefers_measured_and_reports_details():
+    out = peak_day(_daily([50.0, 80.0, 300.0], [40.0, 126.0, 100.0]), days=3)
+    assert out["source"] == "measured" and out["days_compared"] == 3
+    assert out["peak"] == {"date": "2026-01-02", "value": 126.0, "measured": 126.0,
+                           "modelled": 80.0, "difference": -46.0, "category": "Very Poor",
+                           "ratio_to_standard": 2.1}
+    assert out["standard"] == 60 and out["window_days"] == 3
+
+
+def test_peak_tie_goes_to_earliest_date():
+    out = peak_day(_daily([0.0] * 3, [80.0, 120.0, 120.0]), days=3)
+    assert out["peak"]["date"] == "2026-01-02"
+
+
+def test_peak_ignores_nan_days():
+    out = peak_day(_daily([1.0, 2.0, 3.0], [np.nan, 40.0, np.nan]), days=3)
+    assert out["peak"]["date"] == "2026-01-02" and out["days_compared"] == 1
+
+
+def test_peak_all_nan_is_null_with_reason():
+    out = peak_day(_daily([np.nan, np.nan], [np.nan, np.nan]), days=30)
+    assert out["peak"] is None and out["source"] is None
+    assert "30 days" in out["reason"]
+
+
+def test_peak_falls_back_to_modelled():
+    out = peak_day(_daily([20.0, 95.0], [np.nan, np.nan]), days=2)
+    assert out["source"] == "modelled"
+    assert out["peak"]["value"] == 95.0 and out["peak"]["category"] == "Poor"
+    assert out["peak"]["measured"] is None and out["peak"]["difference"] is None
+
+
+def test_peak_excludes_today():
+    d = _daily([10.0, 20.0, 999.0], [10.0, 20.0, 999.0])
+    out = peak_day(d, days=3, today=pd.Timestamp("2026-01-03"))
+    assert out["peak"]["date"] == "2026-01-02"

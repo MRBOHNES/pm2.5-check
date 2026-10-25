@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 import httpx
+import pandas as pd
 import pytest
 import respx
 from fastapi.testclient import TestClient
@@ -75,3 +76,47 @@ def test_missing_openaq_key_is_503(api, monkeypatch):
     monkeypatch.setattr("app.client.load_dotenv", lambda: None)
     respx.get(c.OPEN_METEO_URL).mock(return_value=httpx.Response(200, json=SAMPLE))
     assert api.get("/delhi/model-vs-measured").status_code == 503
+
+
+def _peak_setup(monkeypatch):
+    monkeypatch.setenv("OPENAQ_API_KEY", "test-key")
+    monkeypatch.setattr("app.client.load_dotenv", lambda: None)
+    monkeypatch.setattr("app.main.window_utc", lambda days: ("a", "b"))
+    monkeypatch.setattr("app.main.ist_today", lambda: pd.Timestamp("2026-10-24"))
+    respx.get(c.OPEN_METEO_URL).mock(return_value=httpx.Response(200, json=SAMPLE))
+    respx.get(url__regex=rf"{c.OPENAQ_URL}/sensors/\d+/hours").mock(
+        return_value=httpx.Response(200, json=HOURS))
+
+
+@respx.mock
+def test_peak_delhi_uses_measured(api, monkeypatch):
+    _peak_setup(monkeypatch)
+    body = api.get("/peak", params={"city": "Delhi", "days": 7}).json()
+    assert body["city"] == "delhi" and body["source"] == "measured"
+    assert body["peak"]["measured"] == body["peak"]["value"]
+    assert body["peak"]["modelled"] is not None and body["standard"] == 60
+    assert body["peak"]["date"] < "2026-10-24"  # today is never the peak
+
+
+@respx.mock
+def test_peak_other_city_falls_back_to_modelled(api, monkeypatch):
+    _peak_setup(monkeypatch)
+    body = api.get("/peak", params={"city": "mumbai", "days": 7}).json()
+    assert body["source"] == "modelled" and body["peak"]["measured"] is None
+
+
+def test_peak_unknown_city_404_and_bad_days_422(api):
+    assert api.get("/peak", params={"city": "atlantis"}).status_code == 404
+    assert api.get("/peak", params={"city": "delhi", "days": 0}).status_code == 422
+    assert api.get("/peak", params={"city": "delhi", "days": 93}).status_code == 422
+
+
+def test_health_makes_no_upstream_calls(api):
+    body = api.get("/health").json()
+    assert body["status"] == "ok" and body["version"] and "T" in body["time"]
+
+
+def test_cities_lists_supported_with_measured_flag(api):
+    body = api.get("/cities").json()
+    assert [c["name"] for c in body] == ["delhi", "chandigarh", "mumbai", "bengaluru"]
+    assert [c["name"] for c in body if c["has_measured"]] == ["delhi"]
