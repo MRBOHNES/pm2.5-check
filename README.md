@@ -35,6 +35,18 @@ Measured values exist for Delhi only (five stations). Other cities fall back to 
 
 Numbers come from a live run on 26 Oct 2026 and change daily. 26 of 30 days have station data (see Limitations).
 
+## How it works
+```mermaid
+flowchart LR
+    Browser["Browser"] --> Web["React + Vite page<br/>(Vercel)"]
+    Web -- "GET /cities, /peak, /series" --> API["FastAPI<br/>(Vercel function)"]
+    API -- "1 call, 4 cities" --> OM["Open-Meteo<br/>modelled"]
+    API -- "5 stations, concurrent" --> AQ["OpenAQ v3<br/>measured"]
+```
+Hourly values become IST daily means (a day needs 18+ valid hours), modelled and measured are joined on the date, and
+NumPy/pandas compute the CPCB category, MAE, correlation and the peak day. The data rules, module map and the reasons
+behind each choice are in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+
 ## Run locally
 Needs Python 3.12+, Node 22+, and a free [OpenAQ API key](https://explore.openaq.org) (only the Delhi measured
 data needs it; the tests need no key and no network).
@@ -55,7 +67,7 @@ Tests and checks (the same ones CI runs):
 ```bash
 .venv/bin/ruff check . && .venv/bin/ruff format --check .
 .venv/bin/pytest -q --cov=app --cov-fail-under=80      # 74 tests, ~85% coverage
-cd frontend && npm run lint && npm run typecheck && npm test -- --run && npm run build   # 22 tests
+cd frontend && npm run lint && npm run typecheck && npm test -- --run && npm run build   # 25 tests
 ```
 `.env` is gitignored: the key lives only there (and in Vercel's settings), never in `.env.example`.
 
@@ -68,84 +80,18 @@ plus `/summary/{city}`, `/compare?cities=delhi,mumbai`, `/delhi/model-vs-measure
 docker build -t pm25-check . && docker run -p 8000:8000 --env-file .env pm25-check
 ```
 
-## How it works
-```
-Open-Meteo (1 call, 4 cities) --+                         +--> /peak ----+
-                                +--> pydantic models --> pandas (IST, dedupe, daily mean >= 18 h)
-OpenAQ (5 Delhi stations,   ----+      (retry, backoff,   +--> /series --+--> React + Recharts page
- concurrent, paginated)                 concurrency cap)      CPCB category (np.select), MAE, r
-```
-- `app/client.py`: one shared async `httpx` client; retry on 429/5xx/timeouts with exponential backoff and jitter,
-  `Retry-After` honoured, other 4xx fail at once; a semaphore caps concurrency. Timeout becomes HTTP 504, other
-  upstream failures 502.
-- `app/cleaning.py`: timestamps to `Asia/Kolkata`, duplicates dropped, impossible values become NaN (never interpolated),
-  daily means need 18+ valid hours.
-- `app/analysis.py`: vectorised CPCB category (`np.select`, inclusive upper bounds so 30 is Good and 30.5 is
-  Satisfactory), MAE, Pearson r, z-score outliers, peak day (measured first, modelled fallback, ties go to the
-  earliest date, today excluded).
-- `app/cache.py`: best-effort 10-minute cache so `/peak` and `/series` share upstream calls.
-  **Serverless instances come and go, so nothing depends on it.**
-- `frontend/`: Vite + React + TypeScript; design tokens in `src/styles/tokens.css`; dark mode follows the OS.
-
 ## Deployment
-Two Vercel projects from this one repo, shipped only by GitHub Actions:
+Two Vercel projects from this one repo, shipped only by GitHub Actions after CI passes on `main`, then smoke-tested.
+Vercel's own Git production deploys are off, and pull requests still get preview deployments. The one-time setup,
+secrets list, how to check a deployment, rollback and troubleshooting are in [`docs/DEPLOY.md`](docs/DEPLOY.md).
 
-```
-push/merge to main --> CI (ruff, pytest>=80%, frontend checks, docker /health)
-                         |  success on main only
-                         v
-                  Deploy workflow --> backend project (FastAPI, repo root)  --> smoke test /health + /peak
-                                  --> frontend project (Vite, frontend/)    --> smoke test page text
-```
-Vercel's own Git production deploys are switched off (`git.deploymentEnabled` for `main` in both `vercel.json`
-files), so nothing reaches production unless CI is green. Pull requests still get Vercel preview deployments.
-
-### One-time setup (you do this in the dashboards)
-1. **Backend project.** Vercel → Add New → Project → import this repo. Name it e.g. `pm25-check-api`.
-   Root Directory `./`, Framework Preset **FastAPI** (Vercel finds `app` in `app/main.py`; Python comes from
-   `.python-version`). Add env vars: `OPENAQ_API_KEY` (Production **and** Preview) and `ALLOWED_ORIGINS` (below).
-2. **Frontend project.** Import the same repo again, e.g. `pm25-check-web`. Root Directory `frontend`, preset **Vite**.
-   Add `VITE_API_URL` = the backend's production URL, no trailing slash (Production **and** Preview).
-3. **Allowed origins.** `ALLOWED_ORIGINS` is comma-separated; `*` matches one host label, never a dot:
-   `https://pm25-check-web.vercel.app,https://pm25-check-web-*-<your-team-slug>.vercel.app`
-   (production domain, then preview deployments). Keep it narrow; do not use `https://*.vercel.app`.
-4. **Token and IDs.** Create a token (Account Settings → Tokens). Project IDs and the Org ID are in each project's
-   Settings → General (or `.vercel/project.json` after `vercel link`).
-5. **GitHub secrets** (Settings → Secrets and variables → Actions). Names only here, never values:
-
-   | Secret | What |
-   |---|---|
-   | `VERCEL_TOKEN` | the token from step 4 |
-   | `VERCEL_ORG_ID` | team/user ID |
-   | `VERCEL_PROJECT_ID_BACKEND` | backend project ID |
-   | `VERCEL_PROJECT_ID_FRONTEND` | frontend project ID |
-   | `BACKEND_URL` | backend production URL, used by the smoke test |
-   | `FRONTEND_URL` (optional) | frontend production URL; if unset the smoke test uses the fresh deployment URL, which can sit behind Vercel's deployment protection |
-
-6. **First deploy.** Actions → Deploy → Run workflow, or merge to `main`.
-7. **Branch protection** (Settings → Branches → Add rule for `main`): require a pull request, require status checks
-   `backend (3.12)`, `backend (3.14)`, `frontend` and `docker` to pass, and block direct pushes.
-
-Env var summary: backend `OPENAQ_API_KEY`, `ALLOWED_ORIGINS`; frontend `VITE_API_URL`. Examples in `.env.example` and
-`frontend/.env.example`.
-
-### Checking a deployment
-- **GitHub:** Actions → Deploy. Green means the build, the deploy and the smoke tests (`/health`, `/peak`, the page
-  title, and the backend address inside the built JS) all passed.
-- **Vercel:** each project's Deployments tab. The top row should say *Ready* and *Current* (Production), with
-  the commit you expect. Deployments made by the workflow show their source as the CLI; one made by a Git push
-  would show the branch, which means Vercel deployed on its own.
-- **Is the live version the latest?** `curl https://pm2-5-check-api.vercel.app/health` returns the deployed commit in
-  `version`. Compare it with `git rev-parse --short origin/main`.
-
-### Rollback
-In Vercel, open each project → Deployments → pick the previous good production deployment → **Promote to Production**
-(do the backend and frontend separately). Then fix forward with a pull request, or `git revert <commit>` and merge it.
-
-### Free-plan notes
-Vercel Hobby functions can take a moment on a cold start; the page shows "Waking up the server…" after 3 seconds.
-The function allows up to 60 s per request (a 30-day fetch from five stations takes about 3 s warm).
-Hobby is for non-commercial use.
+## Docs
+| Doc | Read it for |
+|---|---|
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Data flow, module map, endpoints, data rules, decisions and trade-offs |
+| [`docs/DEPLOY.md`](docs/DEPLOY.md) | Vercel and GitHub setup, secrets, checking a deployment, rollback, troubleshooting |
+| [`docs/BUG_JOURNAL.md`](docs/BUG_JOURNAL.md) | Real bugs: symptom, cause, fix, lesson |
+| [`docs/INTERVIEW_QA.md`](docs/INTERVIEW_QA.md) | Short answers about the code |
 
 ## Limitations
 - **Modelled is not measured.** Open-Meteo gives CAMS model values on a ~45 km grid cell (it snaps coordinates to that
