@@ -106,6 +106,9 @@ files), so nothing reaches production unless CI is green. Pull requests still ge
    `.python-version`). Add env vars: `OPENAQ_API_KEY` (Production **and** Preview) and `ALLOWED_ORIGINS` (below).
 2. **Frontend project.** Import the same repo again, e.g. `pm25-check-web`. Root Directory `frontend`, preset **Vite**.
    Add `VITE_API_URL` = the backend's production URL, no trailing slash (Production **and** Preview).
+   Save it as a plain variable (type **Config**), **not Secret/Sensitive**: `vercel pull` cannot read sensitive
+   values, so the workflow would build the site with an empty address. The deploy workflow checks the built
+   files for the backend address and fails if it is missing.
 3. **Allowed origins.** `ALLOWED_ORIGINS` is comma-separated; `*` matches one host label, never a dot:
    `https://pm25-check-web.vercel.app,https://pm25-check-web-*-<your-team-slug>.vercel.app`
    (production domain, then preview deployments). Keep it narrow; do not use `https://*.vercel.app`.
